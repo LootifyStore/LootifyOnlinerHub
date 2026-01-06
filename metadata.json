@@ -1,0 +1,5 @@
+{
+  "name": "Lootify Onliner Hub v2",
+  "description": "A professional dashboard to keep multiple Discord accounts online 24/7 using WebSocket heartbeat logic, featuring AI-powered status generation and automated status rotation.",
+  "requestFramePermissions": []
+}
