@@ -4,6 +4,7 @@ import { ConnectionStatus, LogEntry, PresenceStatus, Proxy } from '../types.ts';
 export interface WorkerConfig {
   status: PresenceStatus;
   customStatusText: string;
+  statusEmoji?: string;
   rpcEnabled: boolean;
   activityName: string;
   activityType: number;
@@ -146,12 +147,22 @@ export class DiscordWorker {
   private identify() {
     const activities: any[] = [];
     
-    // Custom Status
-    if (this.config.customStatusText) {
+    // Custom Status with Emoji Support
+    if (this.config.customStatusText || this.config.statusEmoji) {
+      const emojiParts = this.config.statusEmoji?.split(':');
+      const emojiObj = emojiParts && emojiParts.length >= 2 ? {
+        name: emojiParts[0],
+        id: emojiParts[1],
+        animated: false
+      } : this.config.statusEmoji ? {
+        name: this.config.statusEmoji
+      } : undefined;
+
       activities.push({
         type: 4,
         name: "Custom Status",
-        state: this.config.customStatusText
+        state: this.config.customStatusText || "",
+        emoji: emojiObj
       });
     }
 

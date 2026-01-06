@@ -31,6 +31,7 @@ export interface DiscordSession {
   // Standard Configuration
   presenceStatus: PresenceStatus;
   customStatusText: string;
+  statusEmoji?: string; // Unicode or Name:ID format
   
   // Enhanced RPC Panel
   rpcEnabled: boolean;
@@ -41,7 +42,7 @@ export interface DiscordSession {
   applicationId?: string;
 }
 
-export interface RotatorSession extends Omit<DiscordSession, 'customStatusText' | 'rpcEnabled' | 'activityName' | 'activityType' | 'activityDetails' | 'activityState' | 'applicationId'> {
+export interface RotatorSession extends Omit<DiscordSession, 'customStatusText' | 'statusEmoji' | 'rpcEnabled' | 'activityName' | 'activityType' | 'activityDetails' | 'activityState' | 'applicationId'> {
   accountType: 'ROTATOR';
   statusList: string[];
   interval: number; // in seconds

@@ -46,7 +46,8 @@ import {
   Import,
   ToggleLeft,
   ToggleRight,
-  Info
+  Info,
+  Sticker
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -76,7 +77,6 @@ const App: React.FC = () => {
   const [proxyPass, setProxyPass] = useState('');
   const [proxyType, setProxyType] = useState<ProxyType>('HTTP');
 
-  // Rename Logic State
   const [editingId, setEditingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
@@ -124,6 +124,7 @@ const App: React.FC = () => {
     }, { 
       status: s.presenceStatus, 
       customStatusText: s.customStatusText, 
+      statusEmoji: s.statusEmoji,
       rpcEnabled: s.rpcEnabled,
       activityName: s.activityName, 
       activityType: s.activityType,
@@ -174,7 +175,7 @@ const App: React.FC = () => {
       const newSession: DiscordSession = {
         id, token: newToken.trim(), label: newLabel.trim() || `Account ${sessions.length + 1}`,
         status: 'OFFLINE', lastHeartbeat: null, startTime: null, logs: [], accountType: 'STANDARD',
-        presenceStatus: 'online', customStatusText: 'Lootify Onliner 😍', rpcEnabled: true,
+        presenceStatus: 'online', customStatusText: 'Lootify Onliner 😍', statusEmoji: '🎁', rpcEnabled: true,
         activityName: 'Lootify Hub', activityType: 0, activityDetails: 'Persistence System', activityState: 'Onliner Active',
         proxyId: selectedProxyId || undefined
       };
@@ -197,11 +198,9 @@ const App: React.FC = () => {
       setEditingId(null);
       return;
     }
-
     setSessions(prev => prev.map(s => s.id === editingId ? { ...s, label: renameValue } : s));
     setRotatorSessions(prev => prev.map(s => s.id === editingId ? { ...s, label: renameValue } : s));
     setProxies(prev => prev.map(p => p.id === editingId ? { ...p, alias: renameValue } : p));
-    
     setEditingId(null);
   };
 
@@ -228,17 +227,11 @@ const App: React.FC = () => {
   const handleBulkProxyImport = (e: React.FormEvent) => {
     e.preventDefault();
     if (!bulkInput.trim()) return;
-
     const lines = bulkInput.trim().split('\n');
     const newProxies: Proxy[] = [];
     let skipped = 0;
-
     lines.forEach((line) => {
-      if (proxies.length + newProxies.length >= 20) {
-        skipped++;
-        return;
-      }
-
+      if (proxies.length + newProxies.length >= 20) { skipped++; return; }
       const parts = line.trim().split(':');
       if (parts.length >= 2) {
         newProxies.push({
@@ -253,7 +246,6 @@ const App: React.FC = () => {
         });
       }
     });
-
     setProxies(prev => [...prev, ...newProxies]);
     setBulkInput('');
     setIsBulkImport(false);
@@ -263,33 +255,27 @@ const App: React.FC = () => {
   const testProxy = async (id: string) => {
     const p = proxies.find(x => x.id === id);
     if (!p) return;
-    
     setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'testing' } : item));
-    
     const relayUrl = getRelayUrl();
     if (!relayUrl) {
       alert("Proxy Testing requires VITE_RELAY_URL to be configured in Vercel settings.");
       setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
       return;
     }
-
     try {
       const testWs = new WebSocket(relayUrl);
-      
       const timeout = setTimeout(() => {
         if (testWs.readyState !== WebSocket.CLOSED) {
           testWs.close();
           setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
         }
       }, 15000);
-
       testWs.onopen = () => {
         testWs.send(JSON.stringify({
           type: 'TEST_PROXY',
           proxy: { host: p.host, port: p.port, username: p.username, password: p.password, type: p.type }
         }));
       };
-
       testWs.onmessage = (event) => {
         clearTimeout(timeout);
         const data = JSON.parse(event.data);
@@ -301,12 +287,10 @@ const App: React.FC = () => {
           testWs.close();
         }
       };
-
       testWs.onerror = () => {
         clearTimeout(timeout);
         setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
       };
-
     } catch (e) {
       setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
     }
@@ -339,7 +323,6 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#050810] text-slate-100 font-sans">
-      
       <aside className="w-80 bg-[#0a0f1d] border-r border-slate-800/40 flex flex-col shrink-0 shadow-2xl">
         <div className="p-8 border-b border-slate-800/40 flex items-center gap-4">
           <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
@@ -448,7 +431,6 @@ const App: React.FC = () => {
               </div>
               <h2 className="text-3xl font-black mb-2 text-center tracking-tighter uppercase">Initialize {addType === 'ROTATOR' ? 'Rotator' : 'Onliner'}</h2>
               <p className="text-center text-slate-500 text-sm mb-10 font-medium tracking-tight">Sync your Discord Token securely with Lootify Onliner.</p>
-              
               <form onSubmit={handleAdd} className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
                    <div className="space-y-3">
@@ -597,14 +579,12 @@ const App: React.FC = () => {
                                   <button onClick={() => removeProxy(p.id)} className="p-2.5 text-slate-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all border border-transparent hover:border-red-500/20"><Trash2 className="w-4 h-4" /></button>
                                </div>
                             </div>
-                            
                             {editingId === p.id ? (
                                <input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onBlur={handleRename} onKeyDown={e => e.key === 'Enter' && handleRename()}
                                  className="bg-slate-950 border border-amber-500 text-2xl font-black rounded px-2 py-0.5 w-full outline-none uppercase tracking-tighter" />
                             ) : (
                                <h4 onDoubleClick={() => { setEditingId(p.id); setRenameValue(p.alias); }} className="text-2xl font-black tracking-tighter uppercase mb-2 truncate cursor-pointer hover:text-amber-400 transition-colors">{p.alias}</h4>
                             )}
-                            
                             {p.testStatus === 'success' && p.ip ? (
                                <div className="mt-4 p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-2xl animate-in fade-in slide-in-from-top-2 duration-300">
                                   <div className="flex items-center justify-between mb-2">
@@ -630,7 +610,6 @@ const App: React.FC = () => {
                                   <span className="text-[10px] font-black uppercase tracking-widest">Untested Node</span>
                                </div>
                             )}
-
                             <div className="space-y-2 mt-6">
                                <div className="flex items-center gap-3 text-slate-500 font-mono text-xs bg-slate-900/50 p-3 rounded-xl border border-slate-800/50"><Globe className="w-3.5 h-3.5" /> {p.host}:{p.port}</div>
                                {p.username && <div className="flex items-center gap-3 text-slate-600 font-mono text-[10px] bg-slate-900/30 p-3 rounded-xl border border-slate-800/30"><Key className="w-3.5 h-3.5" /> Authenticated</div>}
@@ -648,8 +627,7 @@ const App: React.FC = () => {
              )}
           </div>
         ) : currentAccount ? (
-          <div className="p-10 max-w-7xl mx-auto w-full space-y-10 animate-in fade-in duration-500">
-            
+          <div className="p-10 max-w-7xl mx-auto w-full space-y-10 animate-in fade-in duration-500 pb-32">
             <header className={`flex flex-col md:flex-row md:items-center justify-between gap-8 p-12 rounded-[3rem] shadow-2xl border relative overflow-hidden group ${
               selectedType === 'ROTATOR' ? 'bg-[#10081a] border-purple-500/20' : 'bg-[#080d1a] border-blue-500/20'
             }`}>
@@ -688,7 +666,6 @@ const App: React.FC = () => {
                   </div>
                 </div>
               </div>
-
               <div className="flex items-center gap-4 relative z-10">
                 {currentAccount.status !== 'ONLINE' ? (
                   <button onClick={() => selectedType === 'STANDARD' ? startStandard(currentAccount.id) : startRotator(currentAccount.id)} 
@@ -724,7 +701,6 @@ const App: React.FC = () => {
                          <Sparkles className="w-4 h-4" /> AI Suggest
                       </button>
                     </div>
-                    
                     <div className="space-y-6">
                       <div className="flex gap-4">
                         <input type="text" placeholder="Add status (Emoji support 😍)..." value={newStatusItem} onChange={e => setNewStatusItem(e.target.value)}
@@ -735,7 +711,6 @@ const App: React.FC = () => {
                           setNewStatusItem('');
                         }} className="p-4 bg-purple-600 hover:bg-purple-500 rounded-2xl transition-all shadow-lg shadow-purple-600/20"><Plus className="w-6 h-6 text-white" /></button>
                       </div>
-
                       <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                         {(currentAccount as RotatorSession).statusList.map((status, idx) => (
                           <div key={idx} className={`p-5 rounded-2xl border flex items-center justify-between group transition-all ${
@@ -760,7 +735,6 @@ const App: React.FC = () => {
                       </div>
                     </div>
                   </section>
-
                   <section className="bg-[#0a0f1d] border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-10">
                     <div className="flex items-center gap-4 border-b border-slate-800/50 pb-6">
                       <div className="p-3 bg-amber-500/10 rounded-2xl shadow-inner"><Gauge className="w-6 h-6 text-amber-400" /></div>
@@ -823,15 +797,37 @@ const App: React.FC = () => {
                           ))}
                         </div>
                       </div>
+                      
                       <div className="space-y-4">
-                        <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Static Status</label>
-                        <div className="flex gap-3">
-                           <input type="text" value={(currentAccount as DiscordSession).customStatusText} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: e.target.value } : x))}
-                             className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-sm focus:border-blue-500 font-bold shadow-inner" />
-                           <button onClick={async () => {
-                             const suggestions = await generateStatusSuggestions("funny professional gaming");
-                             if (suggestions.length > 0) { setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: suggestions[0].status } : x)); }
-                           }} className="p-5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-2xl border border-indigo-500/20 transition-all"><Sparkles className="w-5 h-5" /></button>
+                        <div className="flex items-center justify-between">
+                           <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Custom Status Configuration</label>
+                           <div className="group relative">
+                              <Info className="w-3.5 h-3.5 text-slate-600 cursor-help" />
+                              <div className="absolute bottom-full right-0 mb-2 w-64 p-3 bg-slate-950 border border-slate-800 rounded-xl text-[10px] text-slate-400 leading-relaxed opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-2xl">
+                                 <p className="font-black text-blue-400 mb-1">EMOJI GUIDE:</p>
+                                 <p className="mb-2">1. UNICODE: Just paste a normal emoji like 🎁</p>
+                                 <p>2. CUSTOM: Use format <span className="text-white">Name:ID</span></p>
+                                 <p className="mt-1 italic">(e.g. Lootify:123456789012345678)</p>
+                              </div>
+                           </div>
+                        </div>
+                        <div className="flex gap-3 items-start">
+                           <div className="relative w-24">
+                              <Sticker className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-600" />
+                              <input type="text" placeholder="Emoji" value={(currentAccount as DiscordSession).statusEmoji || ''} 
+                                onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, statusEmoji: e.target.value } : x))}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3 py-4 text-xs focus:border-blue-500 font-bold shadow-inner" />
+                           </div>
+                           <div className="flex-1 flex gap-2">
+                              <input type="text" value={(currentAccount as DiscordSession).customStatusText} 
+                                onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: e.target.value } : x))}
+                                placeholder="Enter status text..."
+                                className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:border-blue-500 font-bold shadow-inner" />
+                              <button onClick={async () => {
+                                const suggestions = await generateStatusSuggestions("funny professional gaming");
+                                if (suggestions.length > 0) { setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: suggestions[0].status } : x)); }
+                              }} className="p-4 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-2xl border border-indigo-500/20 transition-all"><Sparkles className="w-5 h-5" /></button>
+                           </div>
                         </div>
                       </div>
                     </div>
@@ -911,7 +907,6 @@ const App: React.FC = () => {
                  </div>
                  <Console logs={currentAccount.logs} />
               </section>
-
             </div>
           </div>
         ) : (
