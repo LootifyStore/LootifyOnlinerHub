@@ -68,7 +68,6 @@ const reviveDates = (session: any) => ({
 });
 
 const App: React.FC = () => {
-  // Load initial state from localStorage for persistence
   const [sessions, setSessions] = useState<DiscordSession[]>(() => {
     const saved = localStorage.getItem('lootify_sessions');
     return saved ? JSON.parse(saved).map(reviveDates) : [];
@@ -84,16 +83,12 @@ const App: React.FC = () => {
   
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<AccountType | 'PROXY_VAULT'>('STANDARD');
-
   const [isAdding, setIsAdding] = useState(false);
   const [addType, setAddType] = useState<AccountType>('STANDARD');
   const [newToken, setNewToken] = useState('');
   const [newLabel, setNewLabel] = useState('');
   const [selectedProxyId, setSelectedProxyId] = useState<string>('');
-  
   const [newStatusItem, setNewStatusItem] = useState('');
-  const [customInterval, setCustomInterval] = useState<string>('60');
-
   const [isAddingProxy, setIsAddingProxy] = useState(false);
   const [isBulkImport, setIsBulkImport] = useState(false);
   const [bulkInput, setBulkInput] = useState('');
@@ -103,18 +98,16 @@ const App: React.FC = () => {
   const [proxyUser, setProxyUser] = useState('');
   const [proxyPass, setProxyPass] = useState('');
   const [proxyType, setProxyType] = useState<ProxyType>('HTTP');
-
   const [editingId, setEditingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-
-  // Profile Management State
   const [editingProfile, setEditingProfile] = useState<Partial<DiscordUserProfile>>({});
   const [isSyncingProfile, setIsSyncingProfile] = useState(false);
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
+  const hasAutoResumed = useRef(false);
 
-  // Persistence: Sync state to localStorage whenever it changes
+  // Persistence: Sync state to localStorage
   useEffect(() => {
     localStorage.setItem('lootify_sessions', JSON.stringify(sessions));
   }, [sessions]);
@@ -126,6 +119,26 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('lootify_proxies', JSON.stringify(proxies));
   }, [proxies]);
+
+  // AUTO-RESUME ENGINE: Restarts workers that were online before refresh
+  useEffect(() => {
+    if (hasAutoResumed.current) return;
+    hasAutoResumed.current = true;
+
+    console.log("Lootify: Executing Auto-Resume sequence...");
+    
+    sessions.forEach(s => {
+      if (s.status === 'ONLINE' || s.status === 'CONNECTING') {
+        startStandard(s.id);
+      }
+    });
+
+    rotatorSessions.forEach(s => {
+      if (s.status === 'ONLINE' || s.status === 'CONNECTING') {
+        startRotator(s.id);
+      }
+    });
+  }, []);
 
   const getRelayUrl = () => {
     return (import.meta as any).env?.VITE_RELAY_URL || 
@@ -161,6 +174,9 @@ const App: React.FC = () => {
   }, []);
 
   const startStandard = (id: string) => {
+    // Optimization: Don't restart if already active in ref
+    if (standardWorkers.current.has(id)) return;
+
     const s = sessions.find(x => x.id === id);
     if (!s) return;
     const proxy = proxies.find(p => p.id === s.proxyId);
@@ -184,6 +200,8 @@ const App: React.FC = () => {
   };
 
   const startRotator = (id: string) => {
+    if (rotatorWorkers.current.has(id)) return;
+
     const s = rotatorSessions.find(x => x.id === id);
     if (!s) return;
     const proxy = proxies.find(p => p.id === s.proxyId);
@@ -412,6 +430,14 @@ const App: React.FC = () => {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-8 px-4 space-y-10 custom-scrollbar">
+          <div className="px-4 py-3 bg-indigo-500/5 border border-indigo-500/10 rounded-2xl flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Shield className="w-4 h-4 text-indigo-400" />
+              <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300">Auto-Resume</span>
+            </div>
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+          </div>
+
           <div>
              <button 
                 onClick={() => { setSelectedType('PROXY_VAULT'); setSelectedId(null); }}
@@ -891,7 +917,6 @@ const App: React.FC = () => {
                           {[15, 30, 60, 120].map(val => (
                             <button key={val} onClick={() => {
                               setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, interval: val } : s));
-                              setCustomInterval(val.toString());
                               if (currentAccount.status === 'ONLINE') { stopAccount(currentAccount.id, 'ROTATOR'); setTimeout(() => startRotator(currentAccount.id), 1000); }
                             }} className={`py-4 rounded-2xl text-[11px] font-black border transition-all ${
                               (currentAccount as RotatorSession).interval === val ? 'bg-amber-500/10 border-amber-500 text-amber-400 shadow-lg shadow-amber-500/5' : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-white hover:border-slate-600'
