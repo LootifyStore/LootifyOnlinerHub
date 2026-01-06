@@ -20,7 +20,6 @@ export class DiscordRotatorWorker {
   private config: RotatorConfig;
   private currentIndex: number = 0;
   
-  // Reads the relay URL from Vercel/Vite environment variables
   private RELAY_URL = (import.meta as any).env?.VITE_RELAY_URL || (window as any).process?.env?.VITE_RELAY_URL || "";
 
   constructor(
@@ -34,9 +33,10 @@ export class DiscordRotatorWorker {
   }
 
   private log(message: string, type: LogEntry['type'] = 'INFO') {
+    const proxyIp = this.config.proxy?.ip || this.config.proxy?.host;
     this.onUpdate(this.isConnected ? 'ONLINE' : 'CONNECTING', {
       timestamp: new Date(),
-      message,
+      message: this.config.proxy ? `[${proxyIp}] ${message}` : message,
       type
     });
   }

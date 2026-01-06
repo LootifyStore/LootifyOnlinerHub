@@ -4,8 +4,12 @@ import { ConnectionStatus, LogEntry, PresenceStatus, Proxy } from '../types.ts';
 export interface WorkerConfig {
   status: PresenceStatus;
   customStatusText: string;
+  rpcEnabled: boolean;
   activityName: string;
   activityType: number;
+  activityDetails?: string;
+  activityState?: string;
+  applicationId?: string;
   proxy?: Proxy;
 }
 
@@ -18,12 +22,12 @@ export class DiscordWorker {
   private onUpdate: (status: ConnectionStatus, log?: LogEntry) => void;
   private isConnected: boolean = false;
   
-  // Reads the relay URL from Vercel/Vite environment variables
   private RELAY_URL = (import.meta as any).env?.VITE_RELAY_URL || (window as any).process?.env?.VITE_RELAY_URL || "";
 
   private config: WorkerConfig = {
     status: 'online',
     customStatusText: '',
+    rpcEnabled: true,
     activityName: '',
     activityType: 0
   };
@@ -41,9 +45,10 @@ export class DiscordWorker {
   }
 
   private log(message: string, type: LogEntry['type'] = 'INFO') {
+    const proxyIp = this.config.proxy?.ip || this.config.proxy?.host;
     this.onUpdate(this.isConnected ? 'ONLINE' : 'CONNECTING', {
       timestamp: new Date(),
-      message,
+      message: this.config.proxy ? `[${proxyIp}] ${message}` : message,
       type
     });
   }
@@ -51,19 +56,17 @@ export class DiscordWorker {
   public connect() {
     this.isConnected = false;
     const proxy = this.config.proxy;
-    
     const discordGateway = 'wss://gateway.discord.gg/?v=10&encoding=json';
-    
-    // Use Relay URL if proxy is present, otherwise direct
     const connectionUrl = (proxy && this.RELAY_URL) ? this.RELAY_URL : discordGateway;
 
     if (proxy && !this.RELAY_URL) {
       this.log('Relay configuration missing. Proxies will not function.', 'ERROR');
     }
 
+    const proxyIp = proxy?.ip || proxy?.host || 'DIRECT';
     this.onUpdate('CONNECTING', { 
       timestamp: new Date(), 
-      message: proxy ? `Routing via Relay [${proxy.alias}]...` : `Establishing Direct Discord Link...`, 
+      message: proxy ? `Routing via Relay [${proxy.alias}] at ${proxyIp}...` : `Establishing Direct Discord Link...`, 
       type: 'INFO' 
     });
 
@@ -91,7 +94,7 @@ export class DiscordWorker {
         const payload = JSON.parse(event.data);
 
         if (payload.type === 'RELAY_READY') {
-          this.log('Relay Node Active. Authenticating with Discord...', 'SUCCESS');
+          this.log('Relay Node Active. Authenticating...', 'SUCCESS');
           return;
         }
         if (payload.type === 'RELAY_ERROR') {
@@ -123,7 +126,7 @@ export class DiscordWorker {
       };
 
       this.ws.onerror = () => {
-        this.log(`Network failure. Verify Relay/Proxy status.`, 'ERROR');
+        this.log(`Network failure. Check Relay/Proxy.`, 'ERROR');
         this.onUpdate('ERROR');
       };
 
@@ -142,6 +145,8 @@ export class DiscordWorker {
 
   private identify() {
     const activities: any[] = [];
+    
+    // Custom Status
     if (this.config.customStatusText) {
       activities.push({
         type: 4,
@@ -149,11 +154,15 @@ export class DiscordWorker {
         state: this.config.customStatusText
       });
     }
-    if (this.config.activityName) {
+
+    // Rich Presence
+    if (this.config.rpcEnabled && this.config.activityName) {
       activities.push({
         type: this.config.activityType,
         name: this.config.activityName,
-        details: "Lootify Hub"
+        details: this.config.activityDetails || undefined,
+        state: this.config.activityState || undefined,
+        application_id: this.config.applicationId || undefined
       });
     }
 

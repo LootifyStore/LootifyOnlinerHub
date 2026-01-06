@@ -43,7 +43,10 @@ import {
   AlertCircle,
   ClipboardList,
   FileText,
-  Import
+  Import,
+  ToggleLeft,
+  ToggleRight,
+  Info
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -72,6 +75,10 @@ const App: React.FC = () => {
   const [proxyUser, setProxyUser] = useState('');
   const [proxyPass, setProxyPass] = useState('');
   const [proxyType, setProxyType] = useState<ProxyType>('HTTP');
+
+  // Rename Logic State
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
@@ -117,8 +124,12 @@ const App: React.FC = () => {
     }, { 
       status: s.presenceStatus, 
       customStatusText: s.customStatusText, 
+      rpcEnabled: s.rpcEnabled,
       activityName: s.activityName, 
       activityType: s.activityType,
+      activityDetails: s.activityDetails,
+      activityState: s.activityState,
+      applicationId: s.applicationId,
       proxy: proxy
     });
     standardWorkers.current.set(id, worker);
@@ -163,7 +174,8 @@ const App: React.FC = () => {
       const newSession: DiscordSession = {
         id, token: newToken.trim(), label: newLabel.trim() || `Account ${sessions.length + 1}`,
         status: 'OFFLINE', lastHeartbeat: null, startTime: null, logs: [], accountType: 'STANDARD',
-        presenceStatus: 'online', customStatusText: 'Lootify Onliner 😍', activityName: 'Lootify Hub', activityType: 0,
+        presenceStatus: 'online', customStatusText: 'Lootify Onliner 😍', rpcEnabled: true,
+        activityName: 'Lootify Hub', activityType: 0, activityDetails: 'Persistence System', activityState: 'Onliner Active',
         proxyId: selectedProxyId || undefined
       };
       setSessions(p => [...p, newSession]);
@@ -178,6 +190,19 @@ const App: React.FC = () => {
     }
     
     setNewToken(''); setNewLabel(''); setSelectedProxyId(''); setIsAdding(false); setSelectedId(id); setSelectedType(addType);
+  };
+
+  const handleRename = () => {
+    if (!editingId || !renameValue.trim()) {
+      setEditingId(null);
+      return;
+    }
+
+    setSessions(prev => prev.map(s => s.id === editingId ? { ...s, label: renameValue } : s));
+    setRotatorSessions(prev => prev.map(s => s.id === editingId ? { ...s, label: renameValue } : s));
+    setProxies(prev => prev.map(p => p.id === editingId ? { ...p, alias: renameValue } : p));
+    
+    setEditingId(null);
   };
 
   const handleAddProxy = (e: React.FormEvent) => {
@@ -208,7 +233,7 @@ const App: React.FC = () => {
     const newProxies: Proxy[] = [];
     let skipped = 0;
 
-    lines.forEach((line, index) => {
+    lines.forEach((line) => {
       if (proxies.length + newProxies.length >= 20) {
         skipped++;
         return;
@@ -218,12 +243,12 @@ const App: React.FC = () => {
       if (parts.length >= 2) {
         newProxies.push({
           id: crypto.randomUUID(),
-          alias: `Bulk ${proxies.length + newProxies.length + 1}`,
+          alias: `${parts[0]} [${parts[1]}]`,
           host: parts[0],
           port: parseInt(parts[1]),
           username: parts[2] || undefined,
           password: parts[3] || undefined,
-          type: proxyType, // Uses the currently selected type in the form
+          type: proxyType,
           testStatus: 'idle'
         });
       }
@@ -261,13 +286,7 @@ const App: React.FC = () => {
       testWs.onopen = () => {
         testWs.send(JSON.stringify({
           type: 'TEST_PROXY',
-          proxy: {
-            host: p.host,
-            port: p.port,
-            username: p.username,
-            password: p.password,
-            type: p.type
-          }
+          proxy: { host: p.host, port: p.port, username: p.username, password: p.password, type: p.type }
         }));
       };
 
@@ -275,12 +294,7 @@ const App: React.FC = () => {
         clearTimeout(timeout);
         const data = JSON.parse(event.data);
         if (data.type === 'TEST_RESULT') {
-          setProxies(prev => prev.map(item => item.id === id ? { 
-            ...item, 
-            testStatus: 'success', 
-            ip: data.ip, 
-            country: data.country 
-          } : item));
+          setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'success', ip: data.ip, country: data.country } : item));
           testWs.close();
         } else if (data.type === 'RELAY_ERROR') {
           setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
@@ -365,18 +379,26 @@ const App: React.FC = () => {
             </div>
             <div className="space-y-1.5">
               {sessions.map(s => (
-                <button
-                  key={s.id} onClick={() => { setSelectedId(s.id); setSelectedType('STANDARD'); }}
-                  className={`w-full group px-4 py-4 rounded-2xl flex items-center gap-4 transition-all border ${
-                    selectedId === s.id && selectedType === 'STANDARD' ? 'bg-blue-600/10 border-blue-500/40 shadow-inner' : 'bg-transparent border-transparent hover:bg-slate-800/30 text-slate-400'
-                  }`}
-                >
-                  <div className="relative shrink-0">
-                    <div className={`w-2.5 h-2.5 rounded-full ${s.status === 'ONLINE' ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-700'}`} />
-                    {s.proxyId && <Globe className="absolute -top-1 -right-1 w-2 h-2 text-amber-500" />}
-                  </div>
-                  <span className="text-sm font-bold truncate flex-1 text-left">{s.label}</span>
-                </button>
+                <div key={s.id} className="group relative">
+                  <button
+                    onClick={() => { setSelectedId(s.id); setSelectedType('STANDARD'); }}
+                    onDoubleClick={() => { setEditingId(s.id); setRenameValue(s.label); }}
+                    className={`w-full px-4 py-4 rounded-2xl flex items-center gap-4 transition-all border ${
+                      selectedId === s.id && selectedType === 'STANDARD' ? 'bg-blue-600/10 border-blue-500/40 shadow-inner' : 'bg-transparent border-transparent hover:bg-slate-800/30 text-slate-400'
+                    }`}
+                  >
+                    <div className="relative shrink-0">
+                      <div className={`w-2.5 h-2.5 rounded-full ${s.status === 'ONLINE' ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-700'}`} />
+                      {s.proxyId && <Globe className="absolute -top-1 -right-1 w-2 h-2 text-amber-500" />}
+                    </div>
+                    {editingId === s.id ? (
+                      <input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onBlur={handleRename} onKeyDown={e => e.key === 'Enter' && handleRename()}
+                        className="bg-slate-950 border border-blue-500 text-sm font-bold rounded px-2 py-0.5 w-full outline-none" />
+                    ) : (
+                      <span className="text-sm font-bold truncate flex-1 text-left">{s.label}</span>
+                    )}
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -390,19 +412,27 @@ const App: React.FC = () => {
             </div>
             <div className="space-y-1.5">
               {rotatorSessions.map(s => (
-                <button
-                  key={s.id} onClick={() => { setSelectedId(s.id); setSelectedType('ROTATOR'); }}
-                  className={`w-full group px-4 py-4 rounded-2xl flex items-center gap-4 transition-all border ${
-                    selectedId === s.id && selectedType === 'ROTATOR' ? 'bg-purple-600/10 border-purple-500/40 shadow-inner' : 'bg-transparent border-transparent hover:bg-slate-800/30 text-slate-400'
-                  }`}
-                >
-                  <div className="relative shrink-0">
-                    <RotateCw className={`w-3.5 h-3.5 ${s.status === 'ONLINE' ? 'text-purple-400 animate-spin-slow' : 'text-slate-700'}`} />
-                    {s.proxyId && <Globe className="absolute -top-1 -right-1 w-2 h-2 text-amber-500" />}
-                  </div>
-                  <span className="text-sm font-bold truncate flex-1 text-left">{s.label}</span>
-                  <span className="text-[10px] font-mono opacity-40">{s.statusList.length}Q</span>
-                </button>
+                <div key={s.id} className="group relative">
+                  <button
+                    onClick={() => { setSelectedId(s.id); setSelectedType('ROTATOR'); }}
+                    onDoubleClick={() => { setEditingId(s.id); setRenameValue(s.label); }}
+                    className={`w-full px-4 py-4 rounded-2xl flex items-center gap-4 transition-all border ${
+                      selectedId === s.id && selectedType === 'ROTATOR' ? 'bg-purple-600/10 border-purple-500/40 shadow-inner' : 'bg-transparent border-transparent hover:bg-slate-800/30 text-slate-400'
+                    }`}
+                  >
+                    <div className="relative shrink-0">
+                      <RotateCw className={`w-3.5 h-3.5 ${s.status === 'ONLINE' ? 'text-purple-400 animate-spin-slow' : 'text-slate-700'}`} />
+                      {s.proxyId && <Globe className="absolute -top-1 -right-1 w-2 h-2 text-amber-500" />}
+                    </div>
+                    {editingId === s.id ? (
+                      <input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onBlur={handleRename} onKeyDown={e => e.key === 'Enter' && handleRename()}
+                        className="bg-slate-950 border border-purple-500 text-sm font-bold rounded px-2 py-0.5 w-full outline-none" />
+                    ) : (
+                      <span className="text-sm font-bold truncate flex-1 text-left">{s.label}</span>
+                    )}
+                    {!editingId && <span className="text-[10px] font-mono opacity-40">{s.statusList.length}Q</span>}
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -428,9 +458,7 @@ const App: React.FC = () => {
                   </div>
                   <div className="space-y-3">
                     <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Route intelligence</label>
-                    <select 
-                      value={selectedProxyId} 
-                      onChange={e => setSelectedProxyId(e.target.value)}
+                    <select value={selectedProxyId} onChange={e => setSelectedProxyId(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-blue-500/40 font-semibold appearance-none text-slate-400"
                     >
                       <option value="">Direct Connection</option>
@@ -453,7 +481,7 @@ const App: React.FC = () => {
             </div>
           </div>
         ) : selectedType === 'PROXY_VAULT' ? (
-          <div className="p-10 max-w-6xl mx-auto w-full space-y-12">
+          <div className="p-10 max-w-6xl mx-auto w-full space-y-12 pb-20">
              <header className="flex flex-col md:flex-row items-center justify-between p-12 bg-gradient-to-br from-amber-600/10 to-[#0a0f1d] border border-amber-500/20 rounded-[3rem] shadow-2xl gap-8">
                 <div className="flex items-center gap-10">
                    <div className="w-24 h-24 bg-amber-500/5 border border-amber-500/20 rounded-[2rem] flex items-center justify-center text-amber-500 shadow-inner">
@@ -461,7 +489,7 @@ const App: React.FC = () => {
                    </div>
                    <div>
                       <h2 className="text-5xl font-black tracking-tighter uppercase italic">Proxy Vault</h2>
-                      <p className="text-slate-500 text-xs font-black uppercase tracking-[0.3em] mt-2">Route your interactions through custom nodes ({proxies.length}/20)</p>
+                      <p className="text-slate-500 text-xs font-black uppercase tracking-[0.3em] mt-2">Route interactions through custom nodes ({proxies.length}/20)</p>
                    </div>
                 </div>
                 <div className="flex gap-4">
@@ -483,10 +511,7 @@ const App: React.FC = () => {
                  <form onSubmit={handleBulkProxyImport} className="space-y-6">
                     <div className="space-y-3">
                       <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Format: Host:Port:User:Pass (One per line)</label>
-                      <textarea 
-                        placeholder="1.2.3.4:8080&#10;5.6.7.8:8080:user:pass" 
-                        value={bulkInput} 
-                        onChange={e => setBulkInput(e.target.value)}
+                      <textarea placeholder="1.2.3.4:8080&#10;5.6.7.8:8080:user:pass" value={bulkInput} onChange={e => setBulkInput(e.target.value)}
                         className="w-full h-48 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-mono focus:border-amber-500/50 outline-none transition-all custom-scrollbar resize-none"
                       />
                     </div>
@@ -548,7 +573,7 @@ const App: React.FC = () => {
                    </form>
                 </div>
              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 pb-20">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                    {proxies.length === 0 ? (
                       <div className="col-span-full py-32 flex flex-col items-center justify-center bg-slate-900/20 border border-dashed border-slate-800 rounded-[3rem]">
                          <Server className="w-16 h-16 text-slate-800 mb-6" />
@@ -560,22 +585,25 @@ const App: React.FC = () => {
                             <div className="flex items-center justify-between mb-8">
                                <div className="px-4 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded-full text-[10px] font-black text-amber-500 uppercase tracking-widest">{p.type}</div>
                                <div className="flex items-center gap-2">
-                                  <button 
-                                    onClick={() => testProxy(p.id)} 
-                                    disabled={p.testStatus === 'testing'}
+                                  <button onClick={() => testProxy(p.id)} disabled={p.testStatus === 'testing'}
                                     className={`p-2.5 rounded-xl transition-all border ${
                                       p.testStatus === 'testing' ? 'bg-amber-500/20 text-amber-500 animate-pulse border-amber-500/30' : 
                                       p.testStatus === 'success' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20' :
                                       p.testStatus === 'failed' ? 'bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20' :
                                       'bg-slate-800/50 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 border-slate-700/50'
-                                    }`}
-                                  >
+                                    }`}>
                                     <Wifi className={`w-4 h-4 ${p.testStatus === 'testing' && 'animate-bounce'}`} />
                                   </button>
                                   <button onClick={() => removeProxy(p.id)} className="p-2.5 text-slate-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all border border-transparent hover:border-red-500/20"><Trash2 className="w-4 h-4" /></button>
                                </div>
                             </div>
-                            <h4 className="text-2xl font-black tracking-tighter uppercase mb-2 truncate">{p.alias}</h4>
+                            
+                            {editingId === p.id ? (
+                               <input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onBlur={handleRename} onKeyDown={e => e.key === 'Enter' && handleRename()}
+                                 className="bg-slate-950 border border-amber-500 text-2xl font-black rounded px-2 py-0.5 w-full outline-none uppercase tracking-tighter" />
+                            ) : (
+                               <h4 onDoubleClick={() => { setEditingId(p.id); setRenameValue(p.alias); }} className="text-2xl font-black tracking-tighter uppercase mb-2 truncate cursor-pointer hover:text-amber-400 transition-colors">{p.alias}</h4>
+                            )}
                             
                             {p.testStatus === 'success' && p.ip ? (
                                <div className="mt-4 p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-2xl animate-in fade-in slide-in-from-top-2 duration-300">
@@ -584,9 +612,7 @@ const App: React.FC = () => {
                                      <CheckCircle2 className="w-3 h-3 text-emerald-500" />
                                   </div>
                                   <p className="text-sm font-mono font-bold text-slate-200">{p.ip}</p>
-                                  <div className="flex items-center gap-2 mt-2 text-[10px] text-slate-500 font-bold uppercase">
-                                     <MapPin className="w-3 h-3" /> {p.country}
-                                  </div>
+                                  <div className="flex items-center gap-2 mt-2 text-[10px] text-slate-500 font-bold uppercase"><MapPin className="w-3 h-3" /> {p.country}</div>
                                </div>
                             ) : p.testStatus === 'failed' ? (
                                <div className="mt-4 p-4 bg-red-500/5 border border-red-500/10 rounded-2xl text-red-400 flex items-center gap-3">
@@ -606,14 +632,8 @@ const App: React.FC = () => {
                             )}
 
                             <div className="space-y-2 mt-6">
-                               <div className="flex items-center gap-3 text-slate-500 font-mono text-xs bg-slate-900/50 p-3 rounded-xl border border-slate-800/50">
-                                  <Globe className="w-3.5 h-3.5" /> {p.host}:{p.port}
-                               </div>
-                               {p.username && (
-                                  <div className="flex items-center gap-3 text-slate-600 font-mono text-[10px] bg-slate-900/30 p-3 rounded-xl border border-slate-800/30">
-                                     <Key className="w-3.5 h-3.5" /> Authenticated
-                                  </div>
-                               )}
+                               <div className="flex items-center gap-3 text-slate-500 font-mono text-xs bg-slate-900/50 p-3 rounded-xl border border-slate-800/50"><Globe className="w-3.5 h-3.5" /> {p.host}:{p.port}</div>
+                               {p.username && <div className="flex items-center gap-3 text-slate-600 font-mono text-[10px] bg-slate-900/30 p-3 rounded-xl border border-slate-800/30"><Key className="w-3.5 h-3.5" /> Authenticated</div>}
                             </div>
                          </div>
                          <div className="mt-10 pt-6 border-t border-slate-900 flex items-center justify-between">
@@ -687,7 +707,6 @@ const App: React.FC = () => {
             </header>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
-              
               {selectedType === 'ROTATOR' ? (
                 <>
                   <section className="bg-[#0a0f1d] border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-10">
@@ -714,9 +733,7 @@ const App: React.FC = () => {
                           if (!newStatusItem.trim()) return;
                           setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: [...s.statusList, newStatusItem.trim()] } : s));
                           setNewStatusItem('');
-                        }} className="p-4 bg-purple-600 hover:bg-purple-500 rounded-2xl transition-all shadow-lg shadow-purple-600/20">
-                          <Plus className="w-6 h-6 text-white" />
-                        </button>
+                        }} className="p-4 bg-purple-600 hover:bg-purple-500 rounded-2xl transition-all shadow-lg shadow-purple-600/20"><Plus className="w-6 h-6 text-white" /></button>
                       </div>
 
                       <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
@@ -736,9 +753,7 @@ const App: React.FC = () => {
                                )}
                                <button onClick={() => {
                                  setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: s.statusList.filter((_, i) => i !== idx) } : s));
-                               }} className="opacity-0 group-hover:opacity-100 p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-all">
-                                 <X className="w-4 h-4" />
-                               </button>
+                               }} className="opacity-0 group-hover:opacity-100 p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-all"><X className="w-4 h-4" /></button>
                             </div>
                           </div>
                         ))}
@@ -751,55 +766,35 @@ const App: React.FC = () => {
                       <div className="p-3 bg-amber-500/10 rounded-2xl shadow-inner"><Gauge className="w-6 h-6 text-amber-400" /></div>
                       <h3 className="font-black text-lg tracking-tight uppercase">Rotation Delay</h3>
                     </div>
-                    
                     <div className="space-y-8">
                       <div className="p-8 bg-slate-950 rounded-3xl border border-slate-800/40 text-center relative group overflow-hidden shadow-inner">
                          <div className="absolute inset-0 bg-gradient-to-b from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                          <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-4">Pulse Interval</p>
                          <h4 className="text-6xl font-mono font-black text-amber-400 tracking-tighter relative z-10">{(currentAccount as RotatorSession).interval}<span className="text-xl ml-1 text-slate-700 font-sans">SEC</span></h4>
                       </div>
-
                       <div className="space-y-6">
                         <div>
                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-3 block">Set Multiplier</label>
                           <div className="flex gap-3">
                             <div className="relative flex-1">
                                <Clock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-600" />
-                               <input 
-                                 type="number" 
-                                 min="15"
-                                 placeholder="Seconds (min 15)..." 
-                                 value={customInterval} 
-                                 onChange={e => setCustomInterval(e.target.value)}
-                                 className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-6 py-4 text-sm focus:border-amber-500/50 transition-all font-bold" 
-                               />
+                               <input type="number" min="15" placeholder="Seconds (min 15)..." value={customInterval} onChange={e => setCustomInterval(e.target.value)}
+                                 className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-6 py-4 text-sm focus:border-amber-500/50 transition-all font-bold" />
                             </div>
-                            <button 
-                              onClick={() => {
+                            <button onClick={() => {
                                 const val = parseInt(customInterval);
                                 if (isNaN(val) || val < 15) return alert("Minimum 15 seconds to prevent Discord flags.");
                                 setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, interval: val } : s));
-                                if (currentAccount.status === 'ONLINE') {
-                                   stopAccount(currentAccount.id, 'ROTATOR');
-                                   setTimeout(() => startRotator(currentAccount.id), 1000);
-                                }
-                              }}
-                              className="px-6 py-4 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black text-xs transition-all shadow-lg shadow-amber-600/20 uppercase tracking-widest"
-                            >
-                              Sync
-                            </button>
+                                if (currentAccount.status === 'ONLINE') { stopAccount(currentAccount.id, 'ROTATOR'); setTimeout(() => startRotator(currentAccount.id), 1000); }
+                              }} className="px-6 py-4 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black text-xs transition-all shadow-lg shadow-amber-600/20 uppercase tracking-widest">Sync</button>
                           </div>
                         </div>
-
                         <div className="grid grid-cols-4 gap-3">
                           {[15, 30, 60, 120].map(val => (
                             <button key={val} onClick={() => {
                               setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, interval: val } : s));
                               setCustomInterval(val.toString());
-                              if (currentAccount.status === 'ONLINE') {
-                                stopAccount(currentAccount.id, 'ROTATOR');
-                                setTimeout(() => startRotator(currentAccount.id), 1000);
-                              }
+                              if (currentAccount.status === 'ONLINE') { stopAccount(currentAccount.id, 'ROTATOR'); setTimeout(() => startRotator(currentAccount.id), 1000); }
                             }} className={`py-4 rounded-2xl text-[11px] font-black border transition-all ${
                               (currentAccount as RotatorSession).interval === val ? 'bg-amber-500/10 border-amber-500 text-amber-400 shadow-lg shadow-amber-500/5' : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-white hover:border-slate-600'
                             }`}>{val}s</button>
@@ -835,42 +830,69 @@ const App: React.FC = () => {
                              className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-sm focus:border-blue-500 font-bold shadow-inner" />
                            <button onClick={async () => {
                              const suggestions = await generateStatusSuggestions("funny professional gaming");
-                             if (suggestions.length > 0) {
-                               setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: suggestions[0].status } : x));
-                             }
-                           }} className="p-5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-2xl border border-indigo-500/20 transition-all">
-                              <Sparkles className="w-5 h-5" />
-                           </button>
+                             if (suggestions.length > 0) { setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: suggestions[0].status } : x)); }
+                           }} className="p-5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-2xl border border-indigo-500/20 transition-all"><Sparkles className="w-5 h-5" /></button>
                         </div>
                       </div>
                     </div>
                   </section>
 
                   <section className="bg-slate-900 border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-8">
-                    <div className="flex items-center gap-4 border-b border-slate-800/50 pb-6">
-                      <div className="p-3 bg-purple-500/10 rounded-2xl shadow-inner"><Gamepad2 className="w-6 h-6 text-purple-400" /></div>
-                      <h3 className="font-black text-lg tracking-tight uppercase">Rich Presence (RPC)</h3>
+                    <div className="flex items-center justify-between border-b border-slate-800/50 pb-6">
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 bg-purple-500/10 rounded-2xl shadow-inner"><Gamepad2 className="w-6 h-6 text-purple-400" /></div>
+                        <h3 className="font-black text-lg tracking-tight uppercase">Rich Presence (RPC)</h3>
+                      </div>
+                      <button onClick={() => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, rpcEnabled: !x.rpcEnabled } : x))}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${ (currentAccount as DiscordSession).rpcEnabled ? 'bg-purple-600 text-white' : 'bg-slate-800 text-slate-500' }`}>
+                        { (currentAccount as DiscordSession).rpcEnabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" /> }
+                        { (currentAccount as DiscordSession).rpcEnabled ? 'RPC ON' : 'RPC OFF' }
+                      </button>
                     </div>
-                    <div className="space-y-8">
-                       <div className="space-y-4">
+
+                    <div className={`space-y-6 transition-all duration-300 ${ !(currentAccount as DiscordSession).rpcEnabled ? 'opacity-30 pointer-events-none grayscale' : ''}`}>
+                      <div className="space-y-3">
                         <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Modality</label>
-                        <div className="flex flex-wrap gap-3">
+                        <div className="flex flex-wrap gap-2">
                           {[
-                            { id: 0, name: 'Playing', icon: <Gamepad2 className="w-4 h-4" /> },
-                            { id: 3, name: 'Watching', icon: <Monitor className="w-4 h-4" /> },
-                            { id: 2, name: 'Listening', icon: <Music className="w-4 h-4" /> }
+                            { id: 0, name: 'Playing', icon: <Gamepad2 className="w-3.5 h-3.5" /> },
+                            { id: 3, name: 'Watching', icon: <Monitor className="w-3.5 h-3.5" /> },
+                            { id: 2, name: 'Listening', icon: <Music className="w-3.5 h-3.5" /> },
+                            { id: 1, name: 'Streaming', icon: <Tv className="w-3.5 h-3.5" /> },
+                            { id: 5, name: 'Competing', icon: <Trophy className="w-3.5 h-3.5" /> }
                           ].map(t => (
                             <button key={t.id} onClick={() => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityType: t.id } : x))}
-                              className={`flex items-center gap-3 px-6 py-4 rounded-2xl text-[11px] font-black border transition-all ${
-                                (currentAccount as DiscordSession).activityType === t.id ? 'bg-purple-600 border-purple-500 text-white shadow-lg' : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-white shadow-inner'
+                              className={`flex items-center gap-2 px-4 py-3 rounded-xl text-[10px] font-black border transition-all ${
+                                (currentAccount as DiscordSession).activityType === t.id ? 'bg-purple-600 border-purple-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-500'
                               }`}>{t.icon} {t.name}</button>
                           ))}
                         </div>
                       </div>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-3">
+                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Name / Application</label>
+                          <input type="text" value={(currentAccount as DiscordSession).activityName} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityName: e.target.value } : x))}
+                            placeholder="e.g. Visual Studio Code" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold" />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Application ID (Optional)</label>
+                          <input type="text" value={(currentAccount as DiscordSession).applicationId || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, applicationId: e.target.value } : x))}
+                            placeholder="Client ID from Dev Portal" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold" />
+                        </div>
+                      </div>
+
                       <div className="space-y-4">
-                        <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Application Name</label>
-                        <input type="text" value={(currentAccount as DiscordSession).activityName} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityName: e.target.value } : x))}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-sm focus:border-purple-500 font-bold shadow-inner" />
+                        <div className="space-y-3">
+                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Details</label>
+                          <input type="text" value={(currentAccount as DiscordSession).activityDetails || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityDetails: e.target.value } : x))}
+                            placeholder="Currently writing logic..." className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold" />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">State</label>
+                          <input type="text" value={(currentAccount as DiscordSession).activityState || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityState: e.target.value } : x))}
+                            placeholder="In a workspace" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold" />
+                        </div>
                       </div>
                     </div>
                   </section>

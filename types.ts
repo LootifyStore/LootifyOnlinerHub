@@ -31,11 +31,17 @@ export interface DiscordSession {
   // Standard Configuration
   presenceStatus: PresenceStatus;
   customStatusText: string;
+  
+  // Enhanced RPC Panel
+  rpcEnabled: boolean;
   activityName: string;
   activityType: number;
+  activityDetails?: string;
+  activityState?: string;
+  applicationId?: string;
 }
 
-export interface RotatorSession extends Omit<DiscordSession, 'customStatusText' | 'activityName' | 'activityType'> {
+export interface RotatorSession extends Omit<DiscordSession, 'customStatusText' | 'rpcEnabled' | 'activityName' | 'activityType' | 'activityDetails' | 'activityState' | 'applicationId'> {
   accountType: 'ROTATOR';
   statusList: string[];
   interval: number; // in seconds
@@ -47,6 +53,7 @@ export interface LogEntry {
   timestamp: Date;
   message: string;
   type: 'INFO' | 'ERROR' | 'SUCCESS' | 'DEBUG';
+  ip?: string; // Optional IP to show in logs
 }
 
 export interface GeminiStatusSuggestion {
