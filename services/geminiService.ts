@@ -3,6 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { GeminiStatusSuggestion } from "../types.ts";
 
 export async function generateStatusSuggestions(theme: string): Promise<GeminiStatusSuggestion[]> {
+  // Always initialize right before use to ensure process.env.API_KEY is available
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   try {
@@ -29,30 +30,6 @@ export async function generateStatusSuggestions(theme: string): Promise<GeminiSt
     return JSON.parse(response.text || "[]");
   } catch (error) {
     console.error("Gemini Error:", error);
-    return [];
-  }
-}
-
-export async function generateBioSuggestions(keywords: string): Promise<string[]> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Generate 3 professional and aesthetic Discord profile bios (max 190 characters) using these keywords: "${keywords}".
-      The bios should be creative, include a few relevant emojis, and be ready to paste. Return as a simple JSON array of strings.`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING }
-        }
-      }
-    });
-
-    return JSON.parse(response.text || "[]");
-  } catch (error) {
-    console.error("Gemini Bio Error:", error);
     return [];
   }
 }
