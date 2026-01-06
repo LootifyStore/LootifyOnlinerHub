@@ -17,18 +17,6 @@ export interface Proxy {
   country?: string;
 }
 
-export interface DiscordUserProfile {
-  id: string;
-  username: string;
-  discriminator: string;
-  avatar: string | null;
-  banner: string | null;
-  accent_color: number | null;
-  global_name: string | null; // Display Name
-  bio: string;
-  pronouns: string;
-}
-
 export interface DiscordSession {
   id: string;
   token: string;
@@ -38,15 +26,12 @@ export interface DiscordSession {
   startTime: Date | null;
   logs: LogEntry[];
   accountType: AccountType;
-  proxyId?: string;
+  proxyId?: string; // Reference to a proxy in the vault
   
-  // Profile Data (Loaded on connect)
-  profile?: DiscordUserProfile;
-
   // Standard Configuration
   presenceStatus: PresenceStatus;
   customStatusText: string;
-  statusEmoji?: string;
+  statusEmoji?: string; // Unicode or Name:ID format
   
   // Enhanced RPC Panel
   rpcEnabled: boolean;
@@ -60,7 +45,7 @@ export interface DiscordSession {
 export interface RotatorSession extends Omit<DiscordSession, 'customStatusText' | 'statusEmoji' | 'rpcEnabled' | 'activityName' | 'activityType' | 'activityDetails' | 'activityState' | 'applicationId'> {
   accountType: 'ROTATOR';
   statusList: string[];
-  interval: number;
+  interval: number; // in seconds
   currentIndex: number;
   presenceStatus: PresenceStatus;
 }
@@ -69,7 +54,7 @@ export interface LogEntry {
   timestamp: Date;
   message: string;
   type: 'INFO' | 'ERROR' | 'SUCCESS' | 'DEBUG';
-  ip?: string;
+  ip?: string; // Optional IP to show in logs
 }
 
 export interface GeminiStatusSuggestion {
