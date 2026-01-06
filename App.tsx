@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { DiscordSession, RotatorSession, ConnectionStatus, LogEntry, GeminiStatusSuggestion, PresenceStatus, AccountType, Proxy, ProxyType } from './types.ts';
+import { DiscordSession, RotatorSession, ConnectionStatus, LogEntry, GeminiStatusSuggestion, PresenceStatus, AccountType, Proxy, ProxyType, DiscordUserProfile } from './types.ts';
 import { DiscordWorker } from './services/discordService.ts';
 import { DiscordRotatorWorker } from './services/rotatorService.ts';
 import { generateStatusSuggestions } from './services/geminiService.ts';
@@ -47,7 +47,13 @@ import {
   ToggleLeft,
   ToggleRight,
   Info,
-  Sticker
+  Sticker,
+  User,
+  Edit3,
+  Palette,
+  Flag,
+  Save,
+  CreditCard
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -80,6 +86,9 @@ const App: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
+  // Profile Management State
+  const [editingProfile, setEditingProfile] = useState<Partial<DiscordUserProfile>>({});
+
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
 
@@ -93,9 +102,11 @@ const App: React.FC = () => {
     setSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
   }, []);
 
-  const updateStandardStatus = useCallback((id: string, status: ConnectionStatus) => {
+  const updateStandardStatus = useCallback((id: string, status: ConnectionStatus, profile?: DiscordUserProfile) => {
     setSessions(prev => prev.map(s => s.id === id ? { 
-      ...s, status, 
+      ...s, 
+      status, 
+      profile: profile || s.profile,
       startTime: status === 'ONLINE' ? (s.startTime || new Date()) : (status === 'OFFLINE' ? null : s.startTime),
       lastHeartbeat: status === 'ONLINE' ? new Date() : s.lastHeartbeat
     } : s));
@@ -118,8 +129,8 @@ const App: React.FC = () => {
     const s = sessions.find(x => x.id === id);
     if (!s) return;
     const proxy = proxies.find(p => p.id === s.proxyId);
-    const worker = new DiscordWorker(s.token, (status, log) => {
-      updateStandardStatus(id, status);
+    const worker = new DiscordWorker(s.token, (status, log, profile) => {
+      updateStandardStatus(id, status, profile);
       if (log) addStandardLog(id, log);
     }, { 
       status: s.presenceStatus, 
@@ -319,6 +330,23 @@ const App: React.FC = () => {
     if (!startTime) return '0 min';
     const mins = Math.floor((new Date().getTime() - startTime.getTime()) / 60000);
     return mins > 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins} min`;
+  };
+
+  const handlePushProfileUpdate = async () => {
+    if (!selectedId || selectedType !== 'STANDARD') return;
+    const worker = standardWorkers.current.get(selectedId);
+    if (!worker) return alert("Account engine must be START to push profile updates.");
+    const success = await worker.updateProfile(editingProfile);
+    if (success) {
+      setEditingProfile({});
+    }
+  };
+
+  const handleHypeSquadJoin = (houseId: number) => {
+    if (!selectedId || selectedType !== 'STANDARD') return;
+    const worker = standardWorkers.current.get(selectedId);
+    if (!worker) return alert("Account engine must be START for HypeSquad updates.");
+    worker.switchHypeSquad(houseId);
   };
 
   return (
@@ -633,10 +661,14 @@ const App: React.FC = () => {
             }`}>
               <div className="flex items-center gap-10 relative z-10">
                 <div className="relative">
-                   <div className={`w-28 h-28 rounded-[2.5rem] flex items-center justify-center border shadow-inner ${
+                   <div className={`w-28 h-28 rounded-[2.5rem] flex items-center justify-center border shadow-inner overflow-hidden ${
                      selectedType === 'ROTATOR' ? 'bg-purple-500/5 border-purple-500/20 text-purple-400' : 'bg-blue-500/5 border-blue-500/20 text-blue-400'
                    }`}>
-                      {selectedType === 'ROTATOR' ? <RotateCw className={`w-12 h-12 ${currentAccount.status === 'ONLINE' && 'animate-spin-slow'}`} /> : <Smile className="w-12 h-12" />}
+                      {(currentAccount as DiscordSession).profile?.avatar ? (
+                        <img src={`https://cdn.discordapp.com/avatars/${(currentAccount as DiscordSession).profile?.id}/${(currentAccount as DiscordSession).profile?.avatar}.png?size=256`} className="w-full h-full object-cover" />
+                      ) : (
+                        selectedType === 'ROTATOR' ? <RotateCw className={`w-12 h-12 ${currentAccount.status === 'ONLINE' && 'animate-spin-slow'}`} /> : <Smile className="w-12 h-12" />
+                      )}
                    </div>
                    <div className={`absolute -bottom-2 -right-2 w-10 h-10 border-[10px] border-[#0a0f1d] rounded-full ${
                      currentAccount.status === 'ONLINE' ? 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.6)]' : 'bg-slate-700'
@@ -644,7 +676,7 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <div className="flex items-center gap-5 mb-3">
-                    <h2 className="text-5xl font-black tracking-tighter uppercase italic">{currentAccount.label}</h2>
+                    <h2 className="text-5xl font-black tracking-tighter uppercase italic">{(currentAccount as DiscordSession).profile?.global_name || currentAccount.label}</h2>
                     <StatusBadge status={currentAccount.status} />
                   </div>
                   <div className="flex flex-wrap items-center gap-y-2 gap-x-6 text-slate-500 text-[10px] font-black uppercase tracking-[0.2em]">
@@ -657,9 +689,6 @@ const App: React.FC = () => {
                         <span className="flex items-center gap-2 text-amber-500">
                           <Globe className="w-3 h-3" /> 
                           PROXY: {proxies.find(p => p.id === currentAccount.proxyId)?.alias} 
-                          {proxies.find(p => p.id === currentAccount.proxyId)?.ip && (
-                            <span className="ml-1 text-slate-400">({proxies.find(p => p.id === currentAccount.proxyId)?.ip})</span>
-                          )}
                         </span>
                       </>
                     )}
@@ -684,6 +713,72 @@ const App: React.FC = () => {
             </header>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
+              {selectedType === 'STANDARD' && (
+                <section className="bg-slate-900 border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-10">
+                   <div className="flex items-center justify-between border-b border-slate-800/50 pb-6">
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 bg-blue-500/10 rounded-2xl shadow-inner"><Edit3 className="w-6 h-6 text-blue-400" /></div>
+                        <h3 className="font-black text-lg tracking-tight uppercase italic">Identity Suite</h3>
+                      </div>
+                      <button onClick={handlePushProfileUpdate} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-[10px] uppercase transition-all shadow-xl flex items-center gap-2">
+                        <Save className="w-4 h-4" /> Persist Sync
+                      </button>
+                   </div>
+                   
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      <div className="space-y-6">
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Display Name</label>
+                          <input type="text" placeholder={(currentAccount as DiscordSession).profile?.global_name || 'Loading...'}
+                            value={editingProfile.global_name || ''} onChange={e => setEditingProfile(p => ({ ...p, global_name: e.target.value }))}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all" />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Pronouns</label>
+                          <input type="text" placeholder={(currentAccount as DiscordSession).profile?.pronouns || 'e.g. they/them'}
+                            value={editingProfile.pronouns || ''} onChange={e => setEditingProfile(p => ({ ...p, pronouns: e.target.value }))}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all" />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">About Me (Bio)</label>
+                          <textarea rows={4} placeholder={(currentAccount as DiscordSession).profile?.bio || 'Tell Discord about yourself...'}
+                            value={editingProfile.bio || ''} onChange={e => setEditingProfile(p => ({ ...p, bio: e.target.value }))}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all resize-none custom-scrollbar shadow-inner" />
+                        </div>
+                      </div>
+
+                      <div className="space-y-8">
+                         <div className="space-y-4">
+                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 block">HypeSquad House</label>
+                           <div className="grid grid-cols-3 gap-3">
+                             {[
+                               { id: 1, name: 'Bravery', color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/20' },
+                               { id: 2, name: 'Brilliance', color: 'text-red-400', bg: 'bg-red-400/10', border: 'border-red-400/20' },
+                               { id: 3, name: 'Balance', color: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/20' }
+                             ].map(house => (
+                               <button key={house.id} onClick={() => handleHypeSquadJoin(house.id)}
+                                 className={`flex flex-col items-center justify-center p-5 rounded-2xl border transition-all hover:scale-[1.05] active:scale-95 ${house.bg} ${house.border}`}>
+                                 <Flag className={`w-6 h-6 ${house.color} mb-2`} />
+                                 <span className={`text-[8px] font-black uppercase ${house.color}`}>{house.name}</span>
+                               </button>
+                             ))}
+                           </div>
+                         </div>
+                         
+                         <div className="p-6 bg-slate-950 border border-slate-800 rounded-[2rem] shadow-inner relative overflow-hidden group">
+                            <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><CreditCard className="w-16 h-16" /></div>
+                            <h4 className="text-[10px] font-black uppercase text-slate-600 mb-6 flex items-center gap-2 tracking-[0.2em]">Profile Metadata</h4>
+                            <div className="space-y-4 font-mono text-[10px]">
+                               <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">INTERNAL ID:</span><span className="text-slate-300">{(currentAccount as DiscordSession).profile?.id || 'Locked'}</span></div>
+                               <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">USERNAME:</span><span className="text-slate-300">@{(currentAccount as DiscordSession).profile?.username || 'Locked'}</span></div>
+                               <div className="flex justify-between"><span className="text-slate-600 uppercase">ACCENT:</span><span className="text-blue-500 font-black">#{(currentAccount as DiscordSession).profile?.accent_color?.toString(16) || 'None'}</span></div>
+                            </div>
+                         </div>
+                      </div>
+                   </div>
+                </section>
+              )}
+
               {selectedType === 'ROTATOR' ? (
                 <>
                   <section className="bg-[#0a0f1d] border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-10">
@@ -692,14 +787,6 @@ const App: React.FC = () => {
                         <div className="p-3 bg-purple-500/10 rounded-2xl shadow-inner"><RotateCw className="w-6 h-6 text-purple-400" /></div>
                         <h3 className="font-black text-lg tracking-tight uppercase">Status Pipeline</h3>
                       </div>
-                      <button onClick={async () => {
-                        const suggestions = await generateStatusSuggestions("motivational tech productivity");
-                        if (suggestions.length > 0) {
-                          setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: [...s.statusList, ...suggestions.map(sg => sg.status)] } : s));
-                        }
-                      }} className="p-3 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-xl transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest border border-indigo-500/20">
-                         <Sparkles className="w-4 h-4" /> AI Suggest
-                      </button>
                     </div>
                     <div className="space-y-6">
                       <div className="flex gap-4">
@@ -723,9 +810,6 @@ const App: React.FC = () => {
                               <p className="text-sm font-bold text-slate-200 truncate">"{status}"</p>
                             </div>
                             <div className="flex items-center gap-2">
-                               { (currentAccount as RotatorSession).currentIndex === idx && (
-                                 <span className="text-[8px] font-black text-purple-400 uppercase tracking-widest px-2 py-1 bg-purple-500/20 rounded-md border border-purple-500/30">Active</span>
-                               )}
                                <button onClick={() => {
                                  setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: s.statusList.filter((_, i) => i !== idx) } : s));
                                }} className="opacity-0 group-hover:opacity-100 p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-all"><X className="w-4 h-4" /></button>
@@ -747,22 +831,6 @@ const App: React.FC = () => {
                          <h4 className="text-6xl font-mono font-black text-amber-400 tracking-tighter relative z-10">{(currentAccount as RotatorSession).interval}<span className="text-xl ml-1 text-slate-700 font-sans">SEC</span></h4>
                       </div>
                       <div className="space-y-6">
-                        <div>
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-3 block">Set Multiplier</label>
-                          <div className="flex gap-3">
-                            <div className="relative flex-1">
-                               <Clock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-600" />
-                               <input type="number" min="15" placeholder="Seconds (min 15)..." value={customInterval} onChange={e => setCustomInterval(e.target.value)}
-                                 className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-6 py-4 text-sm focus:border-amber-500/50 transition-all font-bold" />
-                            </div>
-                            <button onClick={() => {
-                                const val = parseInt(customInterval);
-                                if (isNaN(val) || val < 15) return alert("Minimum 15 seconds to prevent Discord flags.");
-                                setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, interval: val } : s));
-                                if (currentAccount.status === 'ONLINE') { stopAccount(currentAccount.id, 'ROTATOR'); setTimeout(() => startRotator(currentAccount.id), 1000); }
-                              }} className="px-6 py-4 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black text-xs transition-all shadow-lg shadow-amber-600/20 uppercase tracking-widest">Sync</button>
-                          </div>
-                        </div>
                         <div className="grid grid-cols-4 gap-3">
                           {[15, 30, 60, 120].map(val => (
                             <button key={val} onClick={() => {
@@ -783,7 +851,7 @@ const App: React.FC = () => {
                   <section className="bg-slate-900 border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-8">
                     <div className="flex items-center gap-4 border-b border-slate-800/50 pb-6">
                       <div className="p-3 bg-blue-500/10 rounded-2xl shadow-inner"><Smile className="w-6 h-6 text-blue-400" /></div>
-                      <h3 className="font-black text-lg tracking-tight uppercase">Identity Panel</h3>
+                      <h3 className="font-black text-lg tracking-tight uppercase italic">Gateway Identity</h3>
                     </div>
                     <div className="space-y-8">
                        <div className="space-y-4">
@@ -800,29 +868,20 @@ const App: React.FC = () => {
                       
                       <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                           <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Custom Status Configuration</label>
-                           <div className="group relative">
-                              <Info className="w-3.5 h-3.5 text-slate-600 cursor-help" />
-                              <div className="absolute bottom-full right-0 mb-2 w-64 p-3 bg-slate-950 border border-slate-800 rounded-xl text-[10px] text-slate-400 leading-relaxed opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-2xl">
-                                 <p className="font-black text-blue-400 mb-1">EMOJI GUIDE:</p>
-                                 <p className="mb-2">1. UNICODE: Just paste a normal emoji like 🎁</p>
-                                 <p>2. CUSTOM: Use format <span className="text-white">Name:ID</span></p>
-                                 <p className="mt-1 italic">(e.g. Lootify:123456789012345678)</p>
-                              </div>
-                           </div>
+                           <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Custom Status Override</label>
                         </div>
                         <div className="flex gap-3 items-start">
                            <div className="relative w-24">
                               <Sticker className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-600" />
                               <input type="text" placeholder="Emoji" value={(currentAccount as DiscordSession).statusEmoji || ''} 
                                 onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, statusEmoji: e.target.value } : x))}
-                                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3 py-4 text-xs focus:border-blue-500 font-bold shadow-inner" />
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3 py-4 text-xs focus:border-blue-500 font-bold shadow-inner outline-none" />
                            </div>
                            <div className="flex-1 flex gap-2">
                               <input type="text" value={(currentAccount as DiscordSession).customStatusText} 
                                 onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: e.target.value } : x))}
                                 placeholder="Enter status text..."
-                                className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:border-blue-500 font-bold shadow-inner" />
+                                className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:border-blue-500 font-bold shadow-inner outline-none" />
                               <button onClick={async () => {
                                 const suggestions = await generateStatusSuggestions("funny professional gaming");
                                 if (suggestions.length > 0) { setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: suggestions[0].status } : x)); }
@@ -842,13 +901,13 @@ const App: React.FC = () => {
                       <button onClick={() => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, rpcEnabled: !x.rpcEnabled } : x))}
                         className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${ (currentAccount as DiscordSession).rpcEnabled ? 'bg-purple-600 text-white' : 'bg-slate-800 text-slate-500' }`}>
                         { (currentAccount as DiscordSession).rpcEnabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" /> }
-                        { (currentAccount as DiscordSession).rpcEnabled ? 'RPC ON' : 'RPC OFF' }
+                        { (currentAccount as DiscordSession).rpcEnabled ? 'ON' : 'OFF' }
                       </button>
                     </div>
 
                     <div className={`space-y-6 transition-all duration-300 ${ !(currentAccount as DiscordSession).rpcEnabled ? 'opacity-30 pointer-events-none grayscale' : ''}`}>
                       <div className="space-y-3">
-                        <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Modality</label>
+                        <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Activity Type</label>
                         <div className="flex flex-wrap gap-2">
                           {[
                             { id: 0, name: 'Playing', icon: <Gamepad2 className="w-3.5 h-3.5" /> },
@@ -859,7 +918,7 @@ const App: React.FC = () => {
                           ].map(t => (
                             <button key={t.id} onClick={() => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityType: t.id } : x))}
                               className={`flex items-center gap-2 px-4 py-3 rounded-xl text-[10px] font-black border transition-all ${
-                                (currentAccount as DiscordSession).activityType === t.id ? 'bg-purple-600 border-purple-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-500'
+                                (currentAccount as DiscordSession).activityType === t.id ? 'bg-purple-600 border-purple-500 text-white shadow-md shadow-purple-600/10' : 'bg-slate-950 border-slate-800 text-slate-500'
                               }`}>{t.icon} {t.name}</button>
                           ))}
                         </div>
@@ -867,27 +926,24 @@ const App: React.FC = () => {
                       
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-3">
-                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Name / Application</label>
+                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Activity Name</label>
                           <input type="text" value={(currentAccount as DiscordSession).activityName} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityName: e.target.value } : x))}
-                            placeholder="e.g. Visual Studio Code" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold" />
+                            placeholder="e.g. Lootify Hub" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold outline-none" />
                         </div>
                         <div className="space-y-3">
-                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Application ID (Optional)</label>
+                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">App ID</label>
                           <input type="text" value={(currentAccount as DiscordSession).applicationId || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, applicationId: e.target.value } : x))}
-                            placeholder="Client ID from Dev Portal" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold" />
+                            placeholder="Optional Client ID" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold outline-none" />
                         </div>
                       </div>
 
-                      <div className="space-y-4">
-                        <div className="space-y-3">
-                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Details</label>
+                      <div className="space-y-3">
+                        <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">State & Details</label>
+                        <div className="grid grid-cols-2 gap-4">
                           <input type="text" value={(currentAccount as DiscordSession).activityDetails || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityDetails: e.target.value } : x))}
-                            placeholder="Currently writing logic..." className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold" />
-                        </div>
-                        <div className="space-y-3">
-                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">State</label>
+                            placeholder="Details..." className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold outline-none" />
                           <input type="text" value={(currentAccount as DiscordSession).activityState || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityState: e.target.value } : x))}
-                            placeholder="In a workspace" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold" />
+                            placeholder="State..." className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold outline-none" />
                         </div>
                       </div>
                     </div>
@@ -896,10 +952,10 @@ const App: React.FC = () => {
               )}
 
               <section className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-10 shadow-xl xl:col-span-2">
-                 <div className="flex items-center justify-between mb-8">
+                 <div className="flex items-center justify-between mb-8 shrink-0">
                     <div className="flex items-center gap-4">
                       <div className="p-3 bg-emerald-500/10 rounded-2xl shadow-inner"><LayoutDashboard className="w-6 h-6 text-emerald-400" /></div>
-                      <h3 className="font-black text-lg tracking-tight uppercase">Telemetry Console</h3>
+                      <h3 className="font-black text-lg tracking-tight uppercase italic">Telemetry Console</h3>
                     </div>
                     <div className="flex items-center gap-3">
                        <div className="px-6 py-2 bg-emerald-500/10 text-emerald-400 rounded-full text-[10px] font-black tracking-widest border border-emerald-500/20 uppercase shadow-inner">Gateway Secure</div>
@@ -917,7 +973,7 @@ const App: React.FC = () => {
             </div>
             <h2 className="text-6xl font-black tracking-tighter mb-6 uppercase italic">Lootify Onliner</h2>
             <p className="text-slate-500 max-w-lg mx-auto leading-relaxed text-lg font-medium mb-12">
-               Enterprise-grade WebSocket persistence for Discord accounts. Deploy clusters and maintain a consistent 24/7 presence with advanced rotation logic and proxy routing.
+               Enterprise-grade WebSocket persistence for Discord accounts. Deploy clusters and maintain a consistent 24/7 presence with advanced rotation logic and identity synchronization.
             </p>
             <div className="flex gap-4">
                <button onClick={() => { setAddType('STANDARD'); setIsAdding(true); }} className="px-10 py-6 bg-blue-600 hover:bg-blue-500 text-white rounded-[1.75rem] font-black text-sm transition-all shadow-2xl shadow-blue-600/20 active:scale-95 uppercase tracking-widest">Deploy Standard</button>

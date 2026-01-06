@@ -1,5 +1,5 @@
 
-import { ConnectionStatus, LogEntry, PresenceStatus, Proxy } from '../types.ts';
+import { ConnectionStatus, LogEntry, PresenceStatus, Proxy, DiscordUserProfile } from '../types.ts';
 
 export interface WorkerConfig {
   status: PresenceStatus;
@@ -20,7 +20,7 @@ export class DiscordWorker {
   private intervalRef: any = null;
   private sequence: number | null = null;
   private token: string;
-  private onUpdate: (status: ConnectionStatus, log?: LogEntry) => void;
+  private onUpdate: (status: ConnectionStatus, log?: LogEntry, profile?: DiscordUserProfile) => void;
   private isConnected: boolean = false;
   
   private RELAY_URL = (import.meta as any).env?.VITE_RELAY_URL || (window as any).process?.env?.VITE_RELAY_URL || "";
@@ -35,7 +35,7 @@ export class DiscordWorker {
 
   constructor(
     token: string, 
-    onUpdate: (status: ConnectionStatus, log?: LogEntry) => void, 
+    onUpdate: (status: ConnectionStatus, log?: LogEntry, profile?: DiscordUserProfile) => void, 
     config?: WorkerConfig
   ) {
     this.token = token;
@@ -52,6 +52,48 @@ export class DiscordWorker {
       message: this.config.proxy ? `[${proxyIp}] ${message}` : message,
       type
     });
+  }
+
+  private async restRequest(method: string, endpoint: string, body?: any) {
+    // If we have a relay, we should ideally use it for REST too to keep the same IP.
+    // However, if the relay doesn't support REST proxying, we fall back to direct.
+    // For this implementation, we'll try a direct fetch which Discord allows from browsers for most user endpoints.
+    try {
+      const res = await fetch(`https://discord.com/api/v10${endpoint}`, {
+        method,
+        headers: {
+          'Authorization': this.token,
+          'Content-Type': 'application/json'
+        },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      return await res.json();
+    } catch (e) {
+      this.log(`REST Request Failed: ${e}`, 'ERROR');
+      return null;
+    }
+  }
+
+  public async updateProfile(data: Partial<DiscordUserProfile>) {
+    this.log(`Syncing profile changes to Discord...`, 'DEBUG');
+    const result = await this.restRequest('PATCH', '/users/@me', data);
+    if (result && result.id) {
+      this.log('Profile identity updated successfully.', 'SUCCESS');
+      this.onUpdate(this.isConnected ? 'ONLINE' : 'CONNECTING', undefined, result);
+      return true;
+    }
+    this.log(`Profile update failed: ${result?.message || 'Unknown error'}`, 'ERROR');
+    return false;
+  }
+
+  public async switchHypeSquad(houseId: number) {
+    this.log(`Attempting HypeSquad transition...`, 'DEBUG');
+    const result = await this.restRequest('POST', '/hypesquad/online', { house_id: houseId });
+    if (result && result.message) {
+      this.log(`HypeSquad Error: ${result.message}`, 'ERROR');
+    } else {
+      this.log(`Successfully joined HypeSquad House ${houseId}`, 'SUCCESS');
+    }
   }
 
   public connect() {
@@ -117,7 +159,7 @@ export class DiscordWorker {
             if (t === 'READY') {
               this.isConnected = true;
               this.log(`Authorized as ${d.user.username}`, 'SUCCESS');
-              this.onUpdate('ONLINE');
+              this.onUpdate('ONLINE', undefined, d.user);
             }
             break;
           case 1: // Heartbeat Request
