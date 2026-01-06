@@ -54,10 +54,10 @@ export class DiscordWorker {
     });
   }
 
-  // Useful Feature: Perform REST requests through the Relay to maintain Proxy IP
+  // Routes REST API calls through the relay to prevent IP leaks
   private async restRequest(method: string, endpoint: string, body?: any) {
     if (!this.RELAY_URL) {
-      this.log('Relay URL missing. Profile updates will be direct (LEAKS IP).', 'DEBUG');
+      this.log('Relay URL missing. Profile sync will leak your local IP.', 'DEBUG');
       const res = await fetch(`https://discord.com/api/v10${endpoint}`, {
         method,
         headers: {
@@ -69,10 +69,13 @@ export class DiscordWorker {
       return res.json();
     }
 
-    // Wrap the REST request inside a specialized WS command for the relay
-    // Note: This assumes the relay script handles REST proxying via a WebSocket bridge
     return new Promise((resolve, reject) => {
       const restWs = new WebSocket(this.RELAY_URL);
+      const timeout = setTimeout(() => {
+        restWs.close();
+        reject(new Error('Relay timed out during REST bridge.'));
+      }, 15000);
+
       restWs.onopen = () => {
         restWs.send(JSON.stringify({
           type: 'REST_PROXY',
@@ -89,23 +92,27 @@ export class DiscordWorker {
           } : null
         }));
       };
+
       restWs.onmessage = (e) => {
+        clearTimeout(timeout);
         const data = JSON.parse(e.data);
         if (data.type === 'REST_RESULT') {
           resolve(data.data);
           restWs.close();
         } else if (data.type === 'RELAY_ERROR') {
-          reject(data.error);
+          reject(new Error(data.error));
           restWs.close();
         }
       };
-      restWs.onerror = (e) => reject(e);
-      setTimeout(() => restWs.close(), 10000);
+      restWs.onerror = (e) => {
+        clearTimeout(timeout);
+        reject(e);
+      };
     });
   }
 
   public async updateProfile(data: Partial<DiscordUserProfile>) {
-    this.log(`Attempting profile sync: ${Object.keys(data).join(', ')}...`, 'DEBUG');
+    this.log(`Attempting global profile synchronization...`, 'DEBUG');
     try {
       const payload: any = {};
       if (data.global_name !== undefined) payload.global_name = data.global_name;
@@ -114,27 +121,32 @@ export class DiscordWorker {
       if (data.pronouns !== undefined) payload.pronouns = data.pronouns;
 
       const result: any = await this.restRequest('PATCH', '/users/@me', payload);
-      if (result.id) {
-        this.log('Profile settings persisted successfully.', 'SUCCESS');
+      if (result && result.id) {
+        this.log('Profile identity persisted successfully.', 'SUCCESS');
         this.onUpdate(this.isConnected ? 'ONLINE' : 'CONNECTING', undefined, result);
         return true;
       } else {
-        this.log(`Profile update rejected: ${JSON.stringify(result)}`, 'ERROR');
+        const errMsg = result?.message || JSON.stringify(result);
+        this.log(`Profile update failed: ${errMsg}`, 'ERROR');
         return false;
       }
     } catch (e) {
-      this.log(`REST Exception: ${e}`, 'ERROR');
+      this.log(`REST Bridge Failure: ${e}`, 'ERROR');
       return false;
     }
   }
 
   public async switchHypeSquad(houseId: number) {
-    this.log(`Executing HypeSquad Migration to House ${houseId}...`, 'DEBUG');
+    this.log(`Initiating HypeSquad transition to House ${houseId}...`, 'DEBUG');
     try {
-      await this.restRequest('POST', '/hypesquad/online', { house_id: houseId });
-      this.log('HypeSquad House affiliation updated.', 'SUCCESS');
+      const res: any = await this.restRequest('POST', '/hypesquad/online', { house_id: houseId });
+      if (res && res.message) {
+         this.log(`HypeSquad Error: ${res.message}`, 'ERROR');
+      } else {
+         this.log('HypeSquad House affiliation updated.', 'SUCCESS');
+      }
     } catch (e) {
-      this.log(`HypeSquad Error: ${e}`, 'ERROR');
+      this.log(`HypeSquad Failure: ${e}`, 'ERROR');
     }
   }
 
@@ -182,7 +194,7 @@ export class DiscordWorker {
         }
 
         const { op, d, t, s } = payload;
-        if (s) this.sequence = s;
+        if (s !== undefined) this.sequence = s;
 
         switch (op) {
           case 10: 
@@ -193,7 +205,7 @@ export class DiscordWorker {
           case 0: 
             if (t === 'READY') {
               this.isConnected = true;
-              this.log(`Authorized as ${d.user.username}`, 'SUCCESS');
+              this.log(`Authorized as ${d.user.username}#${d.user.discriminator}`, 'SUCCESS');
               this.onUpdate('ONLINE', undefined, d.user);
             }
             break;
@@ -206,8 +218,12 @@ export class DiscordWorker {
       this.ws.onclose = (event) => {
         this.isConnected = false;
         this.stopHeartbeat();
-        if (event.code !== 1000) this.reconnect();
-        else this.onUpdate('OFFLINE');
+        if (event.code !== 1000) {
+          this.log('Connection interrupted. Reconnecting in 5s...', 'ERROR');
+          this.reconnect();
+        } else {
+          this.onUpdate('OFFLINE');
+        }
       };
     } catch (error) {
       this.log(`Fatal Error: ${error}`, 'ERROR');
