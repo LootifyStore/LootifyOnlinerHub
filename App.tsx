@@ -60,7 +60,6 @@ const App: React.FC = () => {
   const [newStatusItem, setNewStatusItem] = useState('');
   const [customInterval, setCustomInterval] = useState<string>('60');
 
-  // Proxy Form State
   const [isAddingProxy, setIsAddingProxy] = useState(false);
   const [proxyAlias, setProxyAlias] = useState('');
   const [proxyHost, setProxyHost] = useState('');
@@ -71,6 +70,8 @@ const App: React.FC = () => {
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
+
+  const RELAY_URL = (window as any).process?.env?.VITE_RELAY_URL || "";
 
   const addStandardLog = useCallback((id: string, log: LogEntry) => {
     setSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
@@ -173,7 +174,7 @@ const App: React.FC = () => {
   const handleAddProxy = (e: React.FormEvent) => {
     e.preventDefault();
     if (!proxyHost || !proxyPort) return;
-    if (proxies.length >= 5) return alert("Maximum 5 proxies allowed in the vault.");
+    if (proxies.length >= 10) return alert("Maximum 10 proxies allowed.");
 
     const newProxy: Proxy = {
       id: crypto.randomUUID(),
@@ -191,24 +192,64 @@ const App: React.FC = () => {
   };
 
   const testProxy = async (id: string) => {
-    setProxies(prev => prev.map(p => p.id === id ? { ...p, testStatus: 'testing' } : p));
+    const p = proxies.find(x => x.id === id);
+    if (!p) return;
     
-    // Simulate a proxy check delay
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'testing' } : item));
     
-    try {
-      const mockIps = ["45.12.33.102", "185.244.22.11", "91.200.12.8", "194.22.4.91", "5.18.2.144"];
-      const mockCountries = ["Germany", "United States", "United Kingdom", "France", "Netherlands"];
-      const randIdx = Math.floor(Math.random() * mockIps.length);
+    if (!RELAY_URL) {
+      alert("Proxy Testing requires VITE_RELAY_URL to be configured in Vercel settings.");
+      setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+      return;
+    }
 
-      setProxies(prev => prev.map(p => p.id === id ? { 
-        ...p, 
-        testStatus: 'success', 
-        ip: mockIps[randIdx], 
-        country: mockCountries[randIdx] 
-      } : p));
+    try {
+      const testWs = new WebSocket(RELAY_URL);
+      
+      const timeout = setTimeout(() => {
+        if (testWs.readyState !== WebSocket.CLOSED) {
+          testWs.close();
+          setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+        }
+      }, 15000);
+
+      testWs.onopen = () => {
+        testWs.send(JSON.stringify({
+          type: 'TEST_PROXY',
+          proxy: {
+            host: p.host,
+            port: p.port,
+            username: p.username,
+            password: p.password,
+            type: p.type
+          }
+        }));
+      };
+
+      testWs.onmessage = (event) => {
+        clearTimeout(timeout);
+        const data = JSON.parse(event.data);
+        if (data.type === 'TEST_RESULT') {
+          setProxies(prev => prev.map(item => item.id === id ? { 
+            ...item, 
+            testStatus: 'success', 
+            ip: data.ip, 
+            country: data.country 
+          } : item));
+          testWs.close();
+        } else if (data.type === 'RELAY_ERROR') {
+          setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+          testWs.close();
+        }
+      };
+
+      testWs.onerror = () => {
+        clearTimeout(timeout);
+        setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+      };
+
     } catch (e) {
-      setProxies(prev => prev.map(p => p.id === id ? { ...p, testStatus: 'failed' } : p));
+      setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
     }
   };
 
@@ -221,7 +262,6 @@ const App: React.FC = () => {
 
   const removeProxy = (id: string) => {
     setProxies(p => p.filter(x => x.id !== id));
-    // Clear associations
     setSessions(s => s.map(x => x.proxyId === id ? { ...x, proxyId: undefined } : x));
     setRotatorSessions(s => s.map(x => x.proxyId === id ? { ...x, proxyId: undefined } : x));
   };
@@ -241,7 +281,6 @@ const App: React.FC = () => {
   return (
     <div className="flex h-screen overflow-hidden bg-[#050810] text-slate-100 font-sans">
       
-      {/* Sidebar */}
       <aside className="w-80 bg-[#0a0f1d] border-r border-slate-800/40 flex flex-col shrink-0 shadow-2xl">
         <div className="p-8 border-b border-slate-800/40 flex items-center gap-4">
           <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
@@ -257,8 +296,6 @@ const App: React.FC = () => {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-8 px-4 space-y-10 custom-scrollbar">
-          
-          {/* Proxy Vault Shortcut */}
           <div>
              <button 
                 onClick={() => { setSelectedType('PROXY_VAULT'); setSelectedId(null); }}
@@ -270,7 +307,7 @@ const App: React.FC = () => {
                    <Globe className={`w-5 h-5 ${selectedType === 'PROXY_VAULT' ? 'text-amber-400' : 'text-slate-600 group-hover:text-amber-400'}`} />
                    <span className="text-xs font-black uppercase tracking-widest">Proxy Vault</span>
                 </div>
-                <span className="text-[10px] font-mono px-2 py-0.5 bg-slate-950 rounded-lg border border-slate-800">{proxies.length}/5</span>
+                <span className="text-[10px] font-mono px-2 py-0.5 bg-slate-950 rounded-lg border border-slate-800">{proxies.length}/10</span>
              </button>
           </div>
 
@@ -327,7 +364,6 @@ const App: React.FC = () => {
         </nav>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 overflow-y-auto flex flex-col relative">
         {isAdding ? (
           <div className="flex-1 flex items-center justify-center p-12">
@@ -470,7 +506,7 @@ const App: React.FC = () => {
                             {p.testStatus === 'success' && p.ip ? (
                                <div className="mt-4 p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-2xl animate-in fade-in slide-in-from-top-2 duration-300">
                                   <div className="flex items-center justify-between mb-2">
-                                     <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">Active Node IP</span>
+                                     <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">Verified Proxy IP</span>
                                      <CheckCircle2 className="w-3 h-3 text-emerald-500" />
                                   </div>
                                   <p className="text-sm font-mono font-bold text-slate-200">{p.ip}</p>
@@ -481,12 +517,12 @@ const App: React.FC = () => {
                             ) : p.testStatus === 'failed' ? (
                                <div className="mt-4 p-4 bg-red-500/5 border border-red-500/10 rounded-2xl text-red-400 flex items-center gap-3">
                                   <AlertCircle className="w-4 h-4 shrink-0" />
-                                  <span className="text-[10px] font-black uppercase tracking-widest leading-tight">Connection Refused: Check Host/Port</span>
+                                  <span className="text-[10px] font-black uppercase tracking-widest leading-tight">Link Refused: Verify Node Status</span>
                                </div>
                             ) : p.testStatus === 'testing' ? (
                                <div className="mt-4 p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl text-amber-400 flex items-center gap-3">
                                   <RefreshCcw className="w-4 h-4 animate-spin shrink-0" />
-                                  <span className="text-[10px] font-black uppercase tracking-widest">Pinging Node Infrastructure...</span>
+                                  <span className="text-[10px] font-black uppercase tracking-widest">Routing through Relay...</span>
                                </div>
                             ) : (
                                <div className="mt-4 p-4 bg-slate-900/50 border border-slate-800/50 rounded-2xl text-slate-500 flex items-center gap-3">
@@ -550,7 +586,7 @@ const App: React.FC = () => {
                           <Globe className="w-3 h-3" /> 
                           PROXY: {proxies.find(p => p.id === currentAccount.proxyId)?.alias} 
                           {proxies.find(p => p.id === currentAccount.proxyId)?.ip && (
-                            <span className="ml-1 text-slate-600">({proxies.find(p => p.id === currentAccount.proxyId)?.ip})</span>
+                            <span className="ml-1 text-slate-400">({proxies.find(p => p.id === currentAccount.proxyId)?.ip})</span>
                           )}
                         </span>
                       </>
@@ -667,7 +703,7 @@ const App: React.FC = () => {
                             <button 
                               onClick={() => {
                                 const val = parseInt(customInterval);
-                                if (isNaN(val) || val < 15) return alert("Minimum 15 seconds to prevent Discord account flags.");
+                                if (isNaN(val) || val < 15) return alert("Minimum 15 seconds to prevent Discord flags.");
                                 setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, interval: val } : s));
                                 if (currentAccount.status === 'ONLINE') {
                                    stopAccount(currentAccount.id, 'ROTATOR');
