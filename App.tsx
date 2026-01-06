@@ -48,7 +48,8 @@ import {
   CreditCard,
   Zap,
   Coffee,
-  Hash
+  Hash,
+  Share2
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -80,7 +81,6 @@ const App: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
-  // Isolated state for Identity Suite to prevent breaking main logic
   const [editingProfile, setEditingProfile] = useState<Partial<DiscordUserProfile>>({});
   const [bioKeywords, setBioKeywords] = useState('');
   const [isGeneratingBio, setIsGeneratingBio] = useState(false);
@@ -185,7 +185,7 @@ const App: React.FC = () => {
         setEditingProfile({});
       }
     } else {
-      alert("Discord Identity Bridge requires an ACTIVE ENGINE to push updates via Proxy.");
+      alert("Discord Engine must be ONLINE to bridge profile updates via Proxy.");
     }
   };
 
@@ -235,6 +235,32 @@ const App: React.FC = () => {
 
   const getProfileValue = (key: keyof DiscordUserProfile) => {
     return (editingProfile[key] as any) ?? (currentAccount as DiscordSession).profile?.[key] ?? '';
+  };
+
+  const handleBulkProxyImport = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkInput.trim()) return;
+    const lines = bulkInput.trim().split('\n');
+    const newProxies: Proxy[] = [];
+    lines.forEach((line) => {
+      if (proxies.length + newProxies.length >= 20) return;
+      const parts = line.trim().split(':');
+      if (parts.length >= 2) {
+        newProxies.push({
+          id: crypto.randomUUID(),
+          alias: `${parts[0]} [${parts[1]}]`,
+          host: parts[0],
+          port: parseInt(parts[1]),
+          username: parts[2] || undefined,
+          password: parts[3] || undefined,
+          type: proxyType,
+          testStatus: 'idle'
+        });
+      }
+    });
+    setProxies(prev => [...prev, ...newProxies]);
+    setBulkInput('');
+    setIsBulkImport(false);
   };
 
   return (
@@ -318,15 +344,38 @@ const App: React.FC = () => {
              <header className="flex flex-col md:flex-row items-center justify-between p-12 bg-gradient-to-br from-amber-600/10 to-[#0a0f1d] border border-amber-500/20 rounded-[3rem] shadow-2xl gap-8">
                 <div className="flex items-center gap-10">
                    <div className="w-24 h-24 bg-amber-500/5 border border-amber-500/20 rounded-[2rem] flex items-center justify-center text-amber-500 shadow-inner"><Globe className="w-12 h-12" /></div>
-                   <div><h2 className="text-5xl font-black tracking-tighter uppercase italic">Proxy Vault</h2><p className="text-slate-500 text-xs font-black uppercase tracking-[0.3em] mt-2">Manage encrypted routes ({proxies.length}/20)</p></div>
+                   <div><h2 className="text-5xl font-black tracking-tighter uppercase italic">Proxy Vault</h2><p className="text-slate-500 text-xs font-black uppercase tracking-[0.3em] mt-2">Route through nodes ({proxies.length}/20)</p></div>
                 </div>
                 <div className="flex gap-4">
-                   <button onClick={() => setIsAddingProxy(true)} className="px-10 py-5 bg-amber-600 hover:bg-amber-500 rounded-[1.5rem] font-black text-sm flex items-center gap-3 shadow-2xl uppercase tracking-widest"><Plus className="w-5 h-5" /> New Node</button>
+                   <button onClick={() => setIsBulkImport(true)} className="px-10 py-5 bg-slate-900 hover:bg-slate-800 rounded-[1.5rem] font-black text-sm flex items-center gap-3 border border-slate-800 uppercase tracking-widest"><ClipboardList className="w-5 h-5" /> Bulk Import</button>
+                   <button onClick={() => setIsAddingProxy(true)} className="px-10 py-5 bg-amber-600 hover:bg-amber-500 rounded-[1.5rem] font-black text-sm flex items-center gap-3 shadow-2xl uppercase tracking-widest"><Plus className="w-5 h-5" /> Register Node</button>
                 </div>
              </header>
 
+             {isBulkImport && (
+               <div className="bg-[#0a0f1d] border border-slate-800/40 rounded-[2.5rem] p-10 animate-in slide-in-from-top-4 duration-300">
+                 <div className="flex items-center gap-4 mb-8">
+                   <Import className="w-6 h-6 text-amber-400" />
+                   <h3 className="text-xl font-black uppercase tracking-tight italic">Bulk Node Ingest</h3>
+                 </div>
+                 <form onSubmit={handleBulkProxyImport} className="space-y-6">
+                    <textarea placeholder="Host:Port:User:Pass (One per line)" value={bulkInput} onChange={e => setBulkInput(e.target.value)}
+                      className="w-full h-48 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-mono focus:border-amber-500/50 outline-none transition-all custom-scrollbar resize-none"
+                    />
+                    <div className="flex gap-4">
+                      <button type="button" onClick={() => setIsBulkImport(false)} className="flex-1 py-5 bg-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest">Cancel</button>
+                      <button type="submit" className="flex-2 py-5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl">Process Batch</button>
+                    </div>
+                 </form>
+               </div>
+             )}
+
              {isAddingProxy && (
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-10 animate-in slide-in-from-top-4 duration-300">
+                   <div className="flex items-center gap-4 mb-8">
+                      <Server className="w-6 h-6 text-amber-400" />
+                      <h3 className="text-xl font-black uppercase tracking-tight italic">Configure Node</h3>
+                   </div>
                    <form onSubmit={(e) => {
                       e.preventDefault();
                       const np: Proxy = { id: crypto.randomUUID(), alias: proxyAlias || 'Unnamed Proxy', host: proxyHost, port: parseInt(proxyPort), username: proxyUser, password: proxyPass, type: proxyType, testStatus: 'idle' };
@@ -334,15 +383,15 @@ const App: React.FC = () => {
                       setIsAddingProxy(false);
                       setProxyAlias(''); setProxyHost(''); setProxyPort('8080'); setProxyUser(''); setProxyPass('');
                    }} className="grid grid-cols-2 gap-6">
-                      <input type="text" placeholder="Alias" value={proxyAlias} onChange={e => setProxyAlias(e.target.value)} required className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
+                      <input type="text" placeholder="Alias (e.g. EU-West)" value={proxyAlias} onChange={e => setProxyAlias(e.target.value)} required className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
                       <select value={proxyType} onChange={e => setProxyType(e.target.value as ProxyType)} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none">
                          <option value="HTTP">HTTP</option>
                          <option value="SOCKS5">SOCKS5</option>
                       </select>
-                      <input type="text" placeholder="Host" value={proxyHost} onChange={e => setProxyHost(e.target.value)} required className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
+                      <input type="text" placeholder="Host Address" value={proxyHost} onChange={e => setProxyHost(e.target.value)} required className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
                       <input type="number" placeholder="Port" value={proxyPort} onChange={e => setProxyPort(e.target.value)} required className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
-                      <input type="text" placeholder="User" value={proxyUser} onChange={e => setProxyUser(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
-                      <input type="password" placeholder="Pass" value={proxyPass} onChange={e => setProxyPass(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
+                      <input type="text" placeholder="Username (Opt)" value={proxyUser} onChange={e => setProxyUser(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
+                      <input type="password" placeholder="Password (Opt)" value={proxyPass} onChange={e => setProxyPass(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-amber-500/50 outline-none" />
                       <div className="col-span-2 flex gap-4">
                          <button type="button" onClick={() => setIsAddingProxy(false)} className="flex-1 py-4 bg-slate-800 rounded-xl font-black text-xs uppercase">Cancel</button>
                          <button type="submit" className="flex-1 py-4 bg-amber-600 rounded-xl font-black text-xs uppercase">Secure Node</button>
@@ -352,7 +401,9 @@ const App: React.FC = () => {
              )}
 
              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {proxies.map(p => (
+                {proxies.length === 0 ? (
+                  <div className="col-span-full py-24 text-center text-slate-600 border border-dashed border-slate-800 rounded-[3rem] uppercase font-black text-sm tracking-widest">No Proxy Nodes Configured</div>
+                ) : proxies.map(p => (
                   <div key={p.id} className="bg-slate-950 border border-slate-800 rounded-[2.5rem] p-8 flex flex-col justify-between group hover:border-amber-500/40 transition-all shadow-xl min-h-[250px]">
                     <div>
                       <div className="flex items-center justify-between mb-8">
@@ -376,14 +427,14 @@ const App: React.FC = () => {
                       <img src={`https://cdn.discordapp.com/avatars/${(currentAccount as DiscordSession).profile?.id}/${(currentAccount as DiscordSession).profile?.avatar}.png?size=256`} className="w-full h-full object-cover" alt="Avatar" />
                     ) : <User className="w-12 h-12 text-slate-700" />}
                   </div>
-                  <div className={`absolute -bottom-2 -right-2 w-10 h-10 border-[10px] border-[#0a0f1d] rounded-full ${currentAccount.status === 'ONLINE' ? 'bg-emerald-500' : 'bg-slate-700'}`} />
+                  <div className={`absolute -bottom-2 -right-2 w-10 h-10 border-[10px] border-[#0a0f1d] rounded-full ${currentAccount.status === 'ONLINE' ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-700'}`} />
                 </div>
                 <div>
                   <h2 className="text-5xl font-black tracking-tighter uppercase italic">{(currentAccount as DiscordSession).profile?.global_name || currentAccount.label}</h2>
                   <div className="flex items-center gap-4 mt-2 font-mono text-[10px] text-slate-500">
                     <StatusBadge status={currentAccount.status} />
-                    <span>{(currentAccount as DiscordSession).profile?.username ? `@${(currentAccount as DiscordSession).profile?.username}` : 'DISCONNECTED'}</span>
-                    {currentAccount.proxyId && <span className="flex items-center gap-1 text-amber-500"><Shield className="w-3 h-3" /> PROXY ACTIVE</span>}
+                    <span>{(currentAccount as DiscordSession).profile?.username ? `@${(currentAccount as DiscordSession).profile?.username}` : 'OFFLINE'}</span>
+                    {currentAccount.proxyId && <span className="flex items-center gap-1 text-amber-500 font-black"><Shield className="w-3 h-3" /> PROXY ACTIVE</span>}
                   </div>
                 </div>
               </div>
@@ -402,30 +453,30 @@ const App: React.FC = () => {
                 <section className="lg:col-span-2 bg-[#0a0f1d] border border-slate-800/40 rounded-[3rem] p-10 space-y-12 shadow-3xl">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
-                      <div className="p-4 bg-blue-500/10 rounded-2xl"><User className="w-8 h-8 text-blue-400" /></div>
+                      <div className="p-4 bg-blue-500/10 rounded-2xl"><Edit3 className="w-8 h-8 text-blue-400" /></div>
                       <div>
                          <h3 className="text-2xl font-black uppercase tracking-tight italic leading-tight">Identity Suite</h3>
-                         <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Global Profile Persistence</p>
+                         <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Profile Persistence & Sync</p>
                       </div>
                     </div>
                     <button onClick={handleSaveProfile} className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-sm uppercase flex items-center gap-3 shadow-xl transition-all">
-                      <Save className="w-5 h-5" /> PERSIST SYNC
+                      <Save className="w-5 h-5" /> SYNC IDENTITY
                     </button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
                     <div className="space-y-8">
                       <div className="space-y-3">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 flex items-center gap-2">Display Name</label>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Display Name</label>
                         <input type="text" 
                           value={getProfileValue('global_name')}
                           onChange={e => setEditingProfile(p => ({ ...p, global_name: e.target.value }))}
-                          placeholder="Loading displayName..."
+                          placeholder="Your public display name..."
                           className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none" />
                       </div>
 
                       <div className="space-y-3">
-                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 flex items-center gap-2">Pronouns</label>
+                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Pronouns</label>
                          <input type="text" 
                             value={getProfileValue('pronouns')}
                             onChange={e => setEditingProfile(p => ({ ...p, pronouns: e.target.value }))}
@@ -434,7 +485,7 @@ const App: React.FC = () => {
                       </div>
 
                       <div className="space-y-3">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 flex items-center justify-between">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 flex justify-between">
                           <span>About Me</span>
                           <span className="text-[9px] text-slate-700">MAX 190</span>
                         </label>
@@ -445,7 +496,7 @@ const App: React.FC = () => {
                             placeholder="Discord Bio..."
                             className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none resize-none custom-scrollbar shadow-inner" />
                           <div className="flex gap-2">
-                             <input type="text" placeholder="AI Keywords..." 
+                             <input type="text" placeholder="AI Keywords (e.g. gamer, tech)..." 
                                value={bioKeywords} onChange={e => setBioKeywords(e.target.value)}
                                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-[11px] font-semibold outline-none focus:border-indigo-500/30" />
                              <button onClick={handleGenerateBio} disabled={isGeneratingBio}
@@ -458,8 +509,38 @@ const App: React.FC = () => {
                     </div>
 
                     <div className="space-y-10">
+                      {/* Discord-style Profile Preview Card */}
+                      <div className="bg-[#111214] rounded-2xl overflow-hidden border border-slate-800/50 shadow-2xl">
+                         <div className="h-20" style={{ backgroundColor: `#${(editingProfile.accent_color ?? (currentAccount as DiscordSession).profile?.accent_color ?? 0).toString(16).padStart(6, '0')}` }} />
+                         <div className="px-4 pb-4 relative">
+                            <div className="w-20 h-20 rounded-full border-[6px] border-[#111214] absolute -top-10 bg-slate-900 overflow-hidden">
+                               {(currentAccount as DiscordSession).profile?.avatar ? (
+                                 <img src={`https://cdn.discordapp.com/avatars/${(currentAccount as DiscordSession).profile?.id}/${(currentAccount as DiscordSession).profile?.avatar}.png?size=128`} className="w-full h-full object-cover" alt="Preview Avatar" />
+                               ) : <div className="w-full h-full flex items-center justify-center text-slate-700"><User className="w-8 h-8" /></div>}
+                               <div className="absolute bottom-1 right-1 w-5 h-5 bg-emerald-500 rounded-full border-[3px] border-[#111214]" />
+                            </div>
+                            <div className="mt-12 space-y-3">
+                               <div>
+                                  <p className="text-white font-black text-lg">{(editingProfile.global_name ?? (currentAccount as DiscordSession).profile?.global_name) || 'Display Name'}</p>
+                                  <p className="text-slate-400 text-xs font-bold">{(currentAccount as DiscordSession).profile?.username || 'username'}</p>
+                               </div>
+                               <div className="h-[1px] bg-slate-800/50" />
+                               <div>
+                                  <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-1">About Me</p>
+                                  <p className="text-xs text-slate-400 leading-relaxed whitespace-pre-wrap">{(editingProfile.bio ?? (currentAccount as DiscordSession).profile?.bio) || 'No bio set.'}</p>
+                               </div>
+                               { (editingProfile.pronouns ?? (currentAccount as DiscordSession).profile?.pronouns) && (
+                                 <div>
+                                    <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-1">Pronouns</p>
+                                    <p className="text-xs text-slate-400">{(editingProfile.pronouns ?? (currentAccount as DiscordSession).profile?.pronouns)}</p>
+                                 </div>
+                               )}
+                            </div>
+                         </div>
+                      </div>
+
                       <div>
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-5 block">Profile Color Index</label>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-5 block flex items-center gap-2">Accent Override</label>
                         <div className="flex items-center gap-4 p-5 bg-slate-950 border border-slate-800 rounded-2xl shadow-inner">
                            <div className="w-14 h-14 rounded-2xl shadow-xl border border-white/5" style={{ backgroundColor: `#${(editingProfile.accent_color ?? (currentAccount as DiscordSession).profile?.accent_color ?? 0).toString(16).padStart(6, '0')}` }} />
                            <div className="flex-1">
@@ -474,7 +555,6 @@ const App: React.FC = () => {
                                    }
                                  }}
                               />
-                              <p className="text-[9px] text-slate-600 uppercase font-black tracking-widest mt-1">Accent Hex</p>
                            </div>
                         </div>
                       </div>
@@ -494,16 +574,6 @@ const App: React.FC = () => {
                               <span className={`text-[8px] font-black uppercase ${house.color}`}>{house.name}</span>
                             </button>
                           ))}
-                        </div>
-                      </div>
-
-                      <div className="p-8 bg-slate-950 border border-slate-800 rounded-[2.5rem] shadow-inner relative overflow-hidden group">
-                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><CreditCard className="w-16 h-16" /></div>
-                        <h4 className="text-xs font-black uppercase text-slate-600 mb-6 flex items-center gap-2">Account Metadata</h4>
-                        <div className="space-y-4 font-mono text-[10px]">
-                           <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">Internal ID:</span><span className="text-slate-300">{(currentAccount as DiscordSession).profile?.id || 'Locked'}</span></div>
-                           <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">Avatar Hash:</span><span className="text-slate-400 truncate w-24 text-right">{(currentAccount as DiscordSession).profile?.avatar || 'None'}</span></div>
-                           <div className="flex justify-between"><span className="text-slate-600 uppercase">State:</span><span className="text-emerald-500 uppercase font-black">Authorized</span></div>
                         </div>
                       </div>
                     </div>
@@ -527,9 +597,9 @@ const App: React.FC = () => {
                             setNewStatusItem('');
                          }} className="px-8 bg-purple-600 rounded-2xl font-black text-white uppercase text-xs">Push</button>
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
                          {(currentAccount as RotatorSession).statusList.map((status, idx) => (
-                            <div key={idx} className={`p-4 rounded-xl border flex items-center justify-between transition-all ${idx === (currentAccount as RotatorSession).currentIndex ? 'bg-purple-600/10 border-purple-500/50' : 'bg-slate-950 border-slate-800'}`}>
+                            <div key={idx} className={`p-4 rounded-xl border flex items-center justify-between transition-all ${idx === (currentAccount as RotatorSession).currentIndex ? 'bg-purple-600/10 border-purple-500/50 shadow-lg' : 'bg-slate-950 border-slate-800'}`}>
                                <span className="text-sm font-bold truncate pr-4 text-slate-300">"{status}"</span>
                                <button onClick={() => setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: s.statusList.filter((_, i) => i !== idx) } : s))} className="text-slate-700 hover:text-red-500 transition-colors"><X className="w-4 h-4" /></button>
                             </div>
@@ -541,7 +611,7 @@ const App: React.FC = () => {
 
               <div className="space-y-10">
                 <section className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-8 shadow-xl">
-                   <h3 className="text-sm font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-3"><Smile className="w-5 h-5 text-blue-400" /> Presence Gate</h3>
+                   <h3 className="text-sm font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-3"><Smile className="w-5 h-5 text-blue-400" /> Gateway Presence</h3>
                    <div className="space-y-6">
                       <div className="p-5 bg-slate-950 border border-slate-800 rounded-2xl flex items-center gap-4 shadow-inner">
                         <span className="text-2xl">{(currentAccount as DiscordSession).statusEmoji || '🎁'}</span>
@@ -552,7 +622,7 @@ const App: React.FC = () => {
                             {['online', 'idle', 'dnd', 'invisible'].map(p => (
                                <button key={p} 
                                   onClick={() => setSessions(prev => prev.map(s => s.id === selectedId ? { ...s, presenceStatus: p as PresenceStatus } : s))}
-                                  className={`py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${(currentAccount as DiscordSession).presenceStatus === p ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-600'}`}>{p}</button>
+                                  className={`py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${(currentAccount as DiscordSession).presenceStatus === p ? 'bg-blue-600 border-blue-500 text-white shadow-lg' : 'bg-slate-950 border-slate-800 text-slate-600'}`}>{p}</button>
                             ))}
                          </div>
                       )}
@@ -580,7 +650,7 @@ const App: React.FC = () => {
                <div className="absolute inset-0 bg-indigo-500/5 rounded-[3.5rem] blur-3xl group-hover:blur-[4rem] transition-all"></div>
             </div>
             <h2 className="text-6xl font-black tracking-tighter mb-6 uppercase italic">Lootify Onliner</h2>
-            <p className="text-slate-500 max-w-lg mx-auto leading-relaxed text-lg font-medium mb-12">Enterprise cluster management for persistent Discord sessions. 24/7 WebSocket heartbeat with identity suite integration.</p>
+            <p className="text-slate-500 max-w-lg mx-auto leading-relaxed text-lg font-medium mb-12">Cluster management for Discord persistent sessions. maintain 24/7 presence with identity synchronization and encrypted routing.</p>
             <div className="flex gap-4">
                <button onClick={() => { setAddType('STANDARD'); setIsAdding(true); }} className="px-12 py-6 bg-blue-600 hover:bg-blue-500 text-white rounded-[1.75rem] font-black text-sm transition-all shadow-2xl shadow-blue-600/20 active:scale-95 uppercase tracking-widest">Deploy Standard</button>
                <button onClick={() => { setAddType('ROTATOR'); setIsAdding(true); }} className="px-12 py-6 bg-purple-600 hover:bg-purple-500 text-white rounded-[1.75rem] font-black text-sm transition-all shadow-2xl shadow-purple-600/20 active:scale-95 uppercase tracking-widest">Deploy Rotator</button>
