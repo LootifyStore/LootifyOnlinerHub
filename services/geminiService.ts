@@ -2,9 +2,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { GeminiStatusSuggestion } from "../types.ts";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 export async function generateStatusSuggestions(theme: string): Promise<GeminiStatusSuggestion[]> {
+  // Always initialize right before use to ensure process.env.API_KEY is available
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",

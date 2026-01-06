@@ -59,13 +59,11 @@
         }
     </style>
     <script>
-        // Polyfill process for browser environment to prevent Gemini/React crashes
-        window.process = {
-            env: {
-                API_KEY: ""
-            },
-            cwd: () => "/"
-        };
+        // Safely polyfill process for browser environment
+        window.process = window.process || {};
+        window.process.env = window.process.env || {};
+        window.process.cwd = window.process.cwd || (() => "/");
+        
         // Catch early boot errors
         window.addEventListener('error', function(e) {
             console.error('Boot Error:', e.error);
