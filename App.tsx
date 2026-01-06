@@ -56,15 +56,26 @@ import {
   CreditCard
 } from 'lucide-react';
 
+// Helper to revive dates from localStorage
+const reviveDates = (session: any) => ({
+  ...session,
+  startTime: session.startTime ? new Date(session.startTime) : null,
+  lastHeartbeat: session.lastHeartbeat ? new Date(session.lastHeartbeat) : null,
+  logs: (session.logs || []).map((l: any) => ({
+    ...l,
+    timestamp: new Date(l.timestamp)
+  }))
+});
+
 const App: React.FC = () => {
   // Load initial state from localStorage for persistence
   const [sessions, setSessions] = useState<DiscordSession[]>(() => {
     const saved = localStorage.getItem('lootify_sessions');
-    return saved ? JSON.parse(saved) : [];
+    return saved ? JSON.parse(saved).map(reviveDates) : [];
   });
   const [rotatorSessions, setRotatorSessions] = useState<RotatorSession[]>(() => {
     const saved = localStorage.getItem('lootify_rotator_sessions');
-    return saved ? JSON.parse(saved) : [];
+    return saved ? JSON.parse(saved).map(reviveDates) : [];
   });
   const [proxies, setProxies] = useState<Proxy[]>(() => {
     const saved = localStorage.getItem('lootify_proxies');
@@ -352,7 +363,8 @@ const App: React.FC = () => {
 
   const formatUptime = (startTime: Date | null) => {
     if (!startTime) return '0 min';
-    const mins = Math.floor((new Date().getTime() - new Date(startTime).getTime()) / 60000);
+    const start = new Date(startTime);
+    const mins = Math.floor((new Date().getTime() - start.getTime()) / 60000);
     return mins > 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins} min`;
   };
 
@@ -540,7 +552,7 @@ const App: React.FC = () => {
                   <button onClick={() => setIsBulkImport(true)} className="px-8 py-5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-[1.5rem] font-black text-sm flex items-center gap-3 transition-all border border-slate-800 uppercase tracking-widest">
                     <ClipboardList className="w-5 h-5" /> Bulk Import
                   </button>
-                  <button onClick={() => setIsAddingProxy(true)} className="px-10 py-5 bg-amber-600 hover:bg-amber-500 text-white rounded-[1.5rem] font-black text-sm flex items-center gap-3 transition-all shadow-2xl active:scale-95 uppercase tracking-widest">
+                  <button onClick={() => setIsAddingProxy(true)} className="px-10 py-5 bg-amber-600 hover:bg-amber-500 text-white rounded-[1.75rem] font-black text-sm flex items-center gap-3 transition-all shadow-2xl active:scale-95 uppercase tracking-widest">
                     <Plus className="w-5 h-5" /> Register Node
                   </button>
                 </div>

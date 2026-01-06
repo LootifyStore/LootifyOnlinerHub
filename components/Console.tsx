@@ -24,6 +24,15 @@ const Console: React.FC<ConsoleProps> = ({ logs }) => {
     }
   };
 
+  const formatTimestamp = (ts: any) => {
+    try {
+      if (ts instanceof Date) return ts.toLocaleTimeString();
+      return new Date(ts).toLocaleTimeString();
+    } catch (e) {
+      return '--:--:--';
+    }
+  };
+
   return (
     <div className="bg-slate-950 rounded-lg border border-slate-800 h-64 flex flex-col overflow-hidden shadow-inner">
       <div className="bg-slate-900 px-4 py-2 border-b border-slate-800 flex justify-between items-center">
@@ -44,7 +53,7 @@ const Console: React.FC<ConsoleProps> = ({ logs }) => {
           logs.map((log, idx) => (
             <div key={idx} className="mb-1 flex gap-3">
               <span className="text-slate-600 shrink-0">
-                [{log.timestamp.toLocaleTimeString()}]
+                [{formatTimestamp(log.timestamp)}]
               </span>
               <span className={`${getTypeColor(log.type)}`}>
                 {log.message}
