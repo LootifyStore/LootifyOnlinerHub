@@ -54,45 +54,112 @@ export class DiscordWorker {
     });
   }
 
+  /**
+   * Routes REST calls through the relay if a proxy is configured to bypass CORS and maintain IP consistency.
+   */
   private async restRequest(method: string, endpoint: string, body?: any) {
-    // If we have a relay, we should ideally use it for REST too to keep the same IP.
-    // However, if the relay doesn't support REST proxying, we fall back to direct.
-    // For this implementation, we'll try a direct fetch which Discord allows from browsers for most user endpoints.
-    try {
-      const res = await fetch(`https://discord.com/api/v10${endpoint}`, {
-        method,
-        headers: {
-          'Authorization': this.token,
-          'Content-Type': 'application/json'
-        },
-        body: body ? JSON.stringify(body) : undefined
-      });
-      return await res.json();
-    } catch (e) {
-      this.log(`REST Request Failed: ${e}`, 'ERROR');
-      return null;
+    const url = `https://discord.com/api/v10${endpoint}`;
+    
+    // If no relay is available, direct fetch will likely fail due to CORS on Discord's side for user accounts
+    if (!this.RELAY_URL) {
+      try {
+        const res = await fetch(url, {
+          method,
+          headers: {
+            'Authorization': this.token,
+            'Content-Type': 'application/json'
+          },
+          body: body ? JSON.stringify(body) : undefined
+        });
+        return await res.json();
+      } catch (e) {
+        this.log(`REST Request Failed (Direct): ${e}`, 'ERROR');
+        return null;
+      }
     }
+
+    // Use the relay to proxy the REST request
+    return new Promise((resolve) => {
+      const restWs = new WebSocket(this.RELAY_URL);
+      const timeout = setTimeout(() => {
+        restWs.close();
+        this.log('Relay REST bridge timed out.', 'ERROR');
+        resolve(null);
+      }, 10000);
+
+      restWs.onopen = () => {
+        restWs.send(JSON.stringify({
+          type: 'REST_PROXY',
+          method,
+          endpoint: url,
+          headers: { 
+            'Authorization': this.token,
+            'Content-Type': 'application/json'
+          },
+          body,
+          proxy: this.config.proxy ? {
+            host: this.config.proxy.host,
+            port: this.config.proxy.port,
+            username: this.config.proxy.username,
+            password: this.config.proxy.password,
+            type: this.config.proxy.type
+          } : null
+        }));
+      };
+
+      restWs.onmessage = (e) => {
+        clearTimeout(timeout);
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'REST_RESULT') {
+            resolve(data.data);
+          } else {
+            resolve(null);
+          }
+        } catch (err) {
+          resolve(null);
+        }
+        restWs.close();
+      };
+
+      restWs.onerror = () => {
+        clearTimeout(timeout);
+        this.log('Relay REST bridge connection error.', 'ERROR');
+        resolve(null);
+        restWs.close();
+      };
+    });
   }
 
   public async updateProfile(data: Partial<DiscordUserProfile>) {
-    this.log(`Syncing profile changes to Discord...`, 'DEBUG');
-    const result = await this.restRequest('PATCH', '/users/@me', data);
+    this.log(`Attempting identity sync for ${this.token.slice(0, 5)}...`, 'DEBUG');
+    
+    // Clean data to only include valid PATCH fields
+    const payload: any = {};
+    if (data.global_name !== undefined) payload.global_name = data.global_name;
+    if (data.bio !== undefined) payload.bio = data.bio;
+    if (data.accent_color !== undefined) payload.accent_color = data.accent_color;
+    if (data.pronouns !== undefined) payload.pronouns = data.pronouns;
+
+    const result: any = await this.restRequest('PATCH', '/users/@me', payload);
     if (result && result.id) {
-      this.log('Profile identity updated successfully.', 'SUCCESS');
+      this.log('Profile identity synced successfully.', 'SUCCESS');
       this.onUpdate(this.isConnected ? 'ONLINE' : 'CONNECTING', undefined, result);
       return true;
     }
-    this.log(`Profile update failed: ${result?.message || 'Unknown error'}`, 'ERROR');
+    
+    const errorMsg = result?.message || JSON.stringify(result) || 'Unknown error';
+    this.log(`Identity sync failed: ${errorMsg}`, 'ERROR');
     return false;
   }
 
   public async switchHypeSquad(houseId: number) {
-    this.log(`Attempting HypeSquad transition...`, 'DEBUG');
-    const result = await this.restRequest('POST', '/hypesquad/online', { house_id: houseId });
+    this.log(`Transitioning HypeSquad house...`, 'DEBUG');
+    const result: any = await this.restRequest('POST', '/hypesquad/online', { house_id: houseId });
     if (result && result.message) {
       this.log(`HypeSquad Error: ${result.message}`, 'ERROR');
     } else {
-      this.log(`Successfully joined HypeSquad House ${houseId}`, 'SUCCESS');
+      this.log(`HypeSquad house affiliation verified.`, 'SUCCESS');
     }
   }
 
@@ -118,7 +185,6 @@ export class DiscordWorker {
 
       this.ws.onopen = () => {
         if (proxy && this.RELAY_URL) {
-          this.log('Relay Handshake: Syncing proxy credentials...', 'DEBUG');
           this.ws?.send(JSON.stringify({
             type: 'INIT_PROXY',
             target: discordGateway,

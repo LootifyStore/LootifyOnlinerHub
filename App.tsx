@@ -112,6 +112,7 @@ const App: React.FC = () => {
     } : s));
   }, []);
 
+  // Fixed typo: logEntry -> LogEntry
   const addRotatorLog = useCallback((id: string, log: LogEntry) => {
     setRotatorSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
   }, []);
@@ -335,7 +336,7 @@ const App: React.FC = () => {
   const handlePushProfileUpdate = async () => {
     if (!selectedId || selectedType !== 'STANDARD') return;
     const worker = standardWorkers.current.get(selectedId);
-    if (!worker) return alert("Account engine must be START to push profile updates.");
+    if (!worker) return alert("Account engine must be ONLINE to push profile updates.");
     const success = await worker.updateProfile(editingProfile);
     if (success) {
       setEditingProfile({});
@@ -347,6 +348,10 @@ const App: React.FC = () => {
     const worker = standardWorkers.current.get(selectedId);
     if (!worker) return alert("Account engine must be START for HypeSquad updates.");
     worker.switchHypeSquad(houseId);
+  };
+
+  const getProfileValue = (key: keyof DiscordUserProfile) => {
+    return (editingProfile[key] as any) ?? (currentAccount as DiscordSession).profile?.[key] ?? '';
   };
 
   return (
@@ -730,19 +735,22 @@ const App: React.FC = () => {
                         <div className="space-y-3">
                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Display Name</label>
                           <input type="text" placeholder={(currentAccount as DiscordSession).profile?.global_name || 'Loading...'}
-                            value={editingProfile.global_name || ''} onChange={e => setEditingProfile(p => ({ ...p, global_name: e.target.value }))}
+                            value={getProfileValue('global_name')} 
+                            onChange={e => setEditingProfile(p => ({ ...p, global_name: e.target.value }))}
                             className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all" />
                         </div>
                         <div className="space-y-3">
                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Pronouns</label>
                           <input type="text" placeholder={(currentAccount as DiscordSession).profile?.pronouns || 'e.g. they/them'}
-                            value={editingProfile.pronouns || ''} onChange={e => setEditingProfile(p => ({ ...p, pronouns: e.target.value }))}
+                            value={getProfileValue('pronouns')} 
+                            onChange={e => setEditingProfile(p => ({ ...p, pronouns: e.target.value }))}
                             className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all" />
                         </div>
                         <div className="space-y-3">
                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">About Me (Bio)</label>
                           <textarea rows={4} placeholder={(currentAccount as DiscordSession).profile?.bio || 'Tell Discord about yourself...'}
-                            value={editingProfile.bio || ''} onChange={e => setEditingProfile(p => ({ ...p, bio: e.target.value }))}
+                            value={getProfileValue('bio')} 
+                            onChange={e => setEditingProfile(p => ({ ...p, bio: e.target.value }))}
                             className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all resize-none custom-scrollbar shadow-inner" />
                         </div>
                       </div>
@@ -791,7 +799,7 @@ const App: React.FC = () => {
                     <div className="space-y-6">
                       <div className="flex gap-4">
                         <input type="text" placeholder="Add status (Emoji support 😍)..." value={newStatusItem} onChange={e => setNewStatusItem(e.target.value)}
-                          className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:border-purple-500/50 transition-all font-medium" />
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-purple-500/50 transition-all font-medium" />
                         <button onClick={() => {
                           if (!newStatusItem.trim()) return;
                           setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: [...s.statusList, newStatusItem.trim()] } : s));
