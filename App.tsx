@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { DiscordSession, RotatorSession, ConnectionStatus, LogEntry, PresenceStatus, AccountType, Proxy, ProxyType, DiscordUserProfile } from './types.ts';
 import { DiscordWorker } from './services/discordService.ts';
 import { DiscordRotatorWorker } from './services/rotatorService.ts';
-import { generateStatusSuggestions } from './services/geminiService.ts';
+import { generateStatusSuggestions, generateBioSuggestions } from './services/geminiService.ts';
 import Console from './components/Console.tsx';
 import StatusBadge from './components/StatusBadge.tsx';
 import { 
@@ -45,7 +45,9 @@ import {
   Palette,
   Flag,
   Save,
-  CreditCard
+  CreditCard,
+  Zap,
+  Coffee
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -73,8 +75,10 @@ const App: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
-  // Local state for profile editing (avoiding direct session mutation while typing)
+  // Local state for profile editing
   const [editingProfile, setEditingProfile] = useState<Partial<DiscordUserProfile>>({});
+  const [bioKeywords, setBioKeywords] = useState('');
+  const [isGeneratingBio, setIsGeneratingBio] = useState(false);
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
@@ -160,7 +164,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Fix: Implemented missing removeAccount function
   const removeAccount = (id: string, type: any) => {
     stopAccount(id, type as AccountType);
     if (type === 'STANDARD') {
@@ -168,9 +171,7 @@ const App: React.FC = () => {
     } else if (type === 'ROTATOR') {
       setRotatorSessions(prev => prev.filter(s => s.id !== id));
     }
-    if (selectedId === id) {
-      setSelectedId(null);
-    }
+    if (selectedId === id) setSelectedId(null);
   };
 
   const handleSaveProfile = async () => {
@@ -182,7 +183,20 @@ const App: React.FC = () => {
         setEditingProfile({});
       }
     } else {
-      alert("Engine must be START to sync profile changes.");
+      alert("Account engine must be ONLINE to push REST profile updates.");
+    }
+  };
+
+  const handleGenerateBio = async () => {
+    if (!bioKeywords.trim()) return;
+    setIsGeneratingBio(true);
+    try {
+      const bios = await generateBioSuggestions(bioKeywords);
+      if (bios.length > 0) {
+        setEditingProfile(p => ({ ...p, bio: bios[0] }));
+      }
+    } finally {
+      setIsGeneratingBio(false);
     }
   };
 
@@ -232,7 +246,7 @@ const App: React.FC = () => {
         </div>
         <nav className="flex-1 overflow-y-auto py-8 px-4 space-y-10 custom-scrollbar">
           <button onClick={() => { setSelectedType('PROXY_VAULT'); setSelectedId(null); }}
-            className={`w-full group px-5 py-4 rounded-2xl flex items-center justify-between transition-all border ${selectedType === 'PROXY_VAULT' ? 'bg-amber-600/10 border-amber-500/40' : 'bg-slate-900/30 border-slate-800/40 hover:bg-slate-800/30 text-slate-400'}`}>
+            className={`w-full group px-5 py-4 rounded-2xl flex items-center justify-between transition-all border ${selectedType === 'PROXY_VAULT' ? 'bg-amber-600/10 border-amber-500/40 shadow-inner' : 'bg-slate-900/30 border-slate-800/40 hover:bg-slate-800/30 text-slate-400'}`}>
             <div className="flex items-center gap-4"><Globe className={`w-5 h-5 ${selectedType === 'PROXY_VAULT' ? 'text-amber-400' : 'text-slate-600 group-hover:text-amber-400'}`} />
             <span className="text-xs font-black uppercase tracking-widest">Proxy Vault</span></div>
             <span className="text-[10px] font-mono px-2 py-0.5 bg-slate-950 rounded-lg border border-slate-800">{proxies.length}/20</span>
@@ -271,7 +285,7 @@ const App: React.FC = () => {
       <main className="flex-1 overflow-y-auto flex flex-col relative">
         {isAdding ? (
           <div className="flex-1 flex items-center justify-center p-12">
-            <div className={`w-full max-w-lg bg-[#0a0f1d] border rounded-[3rem] p-12 shadow-3xl transition-all border-slate-800/20`}>
+            <div className="w-full max-w-lg bg-[#0a0f1d] border rounded-[3rem] p-12 shadow-3xl transition-all border-slate-800/20">
               <h2 className="text-3xl font-black mb-10 text-center tracking-tighter uppercase">Initialize {addType} Engine</h2>
               <form onSubmit={handleAdd} className="space-y-6">
                 <input type="text" placeholder="Alias (e.g. Main Acc)" value={newLabel} onChange={e => setNewLabel(e.target.value)}
@@ -298,7 +312,9 @@ const App: React.FC = () => {
                 </div>
              </header>
              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {proxies.map(p => (
+                {proxies.length === 0 ? (
+                  <div className="col-span-full py-24 text-center text-slate-600 border border-dashed border-slate-800 rounded-[3rem] uppercase font-black text-sm tracking-widest">No Proxy Nodes Configured</div>
+                ) : proxies.map(p => (
                   <div key={p.id} className="bg-slate-950 border border-slate-800 rounded-[2.5rem] p-8 flex flex-col justify-between group hover:border-amber-500/40 transition-all shadow-xl min-h-[300px]">
                     <div>
                       <div className="flex items-center justify-between mb-8"><div className="px-4 py-1.5 bg-amber-500/10 rounded-full text-[10px] font-black text-amber-500 uppercase">{p.type}</div></div>
@@ -314,15 +330,15 @@ const App: React.FC = () => {
             <header className={`flex flex-col md:flex-row md:items-center justify-between gap-8 p-12 rounded-[3rem] shadow-2xl border relative overflow-hidden ${selectedType === 'ROTATOR' ? 'bg-[#10081a] border-purple-500/20' : 'bg-[#080d1a] border-blue-500/20'}`}>
               <div className="flex items-center gap-10 relative z-10">
                 <div className="relative">
-                  <div className="w-28 h-28 rounded-[2.5rem] flex items-center justify-center border bg-slate-950 shadow-inner">
+                  <div className="w-28 h-28 rounded-[2.5rem] flex items-center justify-center border bg-slate-950 shadow-inner overflow-hidden">
                     {(currentAccount as DiscordSession).profile?.avatar ? (
-                      <img src={`https://cdn.discordapp.com/avatars/${(currentAccount as DiscordSession).profile?.id}/${(currentAccount as DiscordSession).profile?.avatar}.png`} className="w-full h-full rounded-[2.5rem] object-cover" alt="Avatar" />
+                      <img src={`https://cdn.discordapp.com/avatars/${(currentAccount as DiscordSession).profile?.id}/${(currentAccount as DiscordSession).profile?.avatar}.png?size=256`} className="w-full h-full object-cover" alt="Avatar" />
                     ) : <User className="w-12 h-12 text-slate-700" />}
                   </div>
                   <div className={`absolute -bottom-2 -right-2 w-10 h-10 border-[10px] border-[#0a0f1d] rounded-full ${currentAccount.status === 'ONLINE' ? 'bg-emerald-500' : 'bg-slate-700'}`} />
                 </div>
                 <div>
-                  <h2 className="text-5xl font-black tracking-tighter uppercase italic">{currentAccount.label}</h2>
+                  <h2 className="text-5xl font-black tracking-tighter uppercase italic">{(currentAccount as DiscordSession).profile?.global_name || currentAccount.label}</h2>
                   <div className="flex items-center gap-4 mt-2">
                     <StatusBadge status={currentAccount.status} />
                     <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{currentAccount.proxyId ? 'SECURED ROUTE' : 'DIRECT LINK'}</span>
@@ -331,50 +347,98 @@ const App: React.FC = () => {
               </div>
               <div className="flex gap-4 relative z-10">
                 {currentAccount.status !== 'ONLINE' ? (
-                  <button onClick={() => selectedType === 'STANDARD' ? startStandard(currentAccount.id) : startRotator(currentAccount.id)} className="px-10 py-5 bg-blue-600 rounded-[1.5rem] font-black text-sm uppercase shadow-2xl">START ENGINE</button>
+                  <button onClick={() => selectedType === 'STANDARD' ? startStandard(currentAccount.id) : startRotator(currentAccount.id)} className="px-10 py-5 bg-blue-600 hover:bg-blue-500 rounded-[1.5rem] font-black text-sm uppercase shadow-2xl active:scale-95 transition-all">START ENGINE</button>
                 ) : (
-                  <button onClick={() => stopAccount(currentAccount.id, selectedType as AccountType)} className="px-10 py-5 bg-red-600/10 text-red-500 rounded-[1.5rem] font-black text-sm border border-red-500/20 transition-all">STOP ENGINE</button>
+                  <button onClick={() => stopAccount(currentAccount.id, selectedType as AccountType)} className="px-10 py-5 bg-red-600/10 text-red-500 rounded-[1.5rem] font-black text-sm border border-red-500/20 hover:bg-red-600/20 transition-all">STOP ENGINE</button>
                 )}
                 <button onClick={() => removeAccount(currentAccount.id, selectedType)} className="p-5 bg-slate-900/50 hover:bg-red-500 text-slate-500 hover:text-white rounded-[1.5rem] border border-slate-800 transition-all"><Trash2 className="w-6 h-6" /></button>
               </div>
             </header>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-              {/* Account Management Suite (New Section) */}
               {selectedType === 'STANDARD' && (
                 <section className="lg:col-span-2 bg-[#0a0f1d] border border-slate-800 rounded-[3rem] p-10 space-y-12 shadow-3xl">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4"><div className="p-4 bg-blue-500/10 rounded-2xl"><User className="w-8 h-8 text-blue-400" /></div>
-                    <h3 className="text-2xl font-black uppercase tracking-tight italic">Profile Identity Suite</h3></div>
-                    <button onClick={handleSaveProfile} className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-sm uppercase flex items-center gap-3 shadow-xl transition-all"><Save className="w-5 h-5" /> SYNC SETTINGS</button>
+                    <div className="flex items-center gap-4">
+                      <div className="p-4 bg-blue-500/10 rounded-2xl"><User className="w-8 h-8 text-blue-400" /></div>
+                      <h3 className="text-2xl font-black uppercase tracking-tight italic">Profile Identity Suite</h3>
+                    </div>
+                    <button onClick={handleSaveProfile} className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-sm uppercase flex items-center gap-3 shadow-xl transition-all">
+                      <Save className="w-5 h-5" /> SYNC SETTINGS
+                    </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                    <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                    <div className="space-y-8">
                       <div className="space-y-3">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Display Name</label>
-                        <input type="text" placeholder={(currentAccount as DiscordSession).profile?.global_name || 'Loading...'}
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 flex items-center gap-2"><Smile className="w-3 h-3" /> Display Name</label>
+                        <input type="text" 
+                          value={editingProfile.global_name ?? (currentAccount as DiscordSession).profile?.global_name ?? ''}
                           onChange={e => setEditingProfile(p => ({ ...p, global_name: e.target.value }))}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40" />
+                          placeholder="Your global name..."
+                          className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none" />
                       </div>
+
                       <div className="space-y-3">
-                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Pronouns</label>
-                         <input type="text" placeholder={(currentAccount as DiscordSession).profile?.pronouns || 'he/him'}
+                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 flex items-center gap-2"><Zap className="w-3 h-3" /> Pronouns</label>
+                         <input type="text" 
+                            value={editingProfile.pronouns ?? (currentAccount as DiscordSession).profile?.pronouns ?? ''}
                             onChange={e => setEditingProfile(p => ({ ...p, pronouns: e.target.value }))}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40" />
+                            placeholder="e.g. they/them"
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none" />
                       </div>
+
                       <div className="space-y-3">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">About Me (Bio)</label>
-                        <textarea rows={4} placeholder={(currentAccount as DiscordSession).profile?.bio || 'Tell Discord about yourself...'}
-                          onChange={e => setEditingProfile(p => ({ ...p, bio: e.target.value }))}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 resize-none custom-scrollbar" />
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 flex items-center justify-between">
+                          <span className="flex items-center gap-2"><Edit3 className="w-3 h-3" /> About Me (Bio)</span>
+                          <span className="text-[9px] text-slate-700">MAX 190 CHARS</span>
+                        </label>
+                        <div className="space-y-3">
+                          <textarea rows={4} 
+                            value={editingProfile.bio ?? (currentAccount as DiscordSession).profile?.bio ?? ''}
+                            onChange={e => setEditingProfile(p => ({ ...p, bio: e.target.value.slice(0, 190) }))}
+                            placeholder="Tell Discord about yourself..."
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none resize-none custom-scrollbar" />
+                          <div className="flex gap-2">
+                             <input type="text" placeholder="Bio keywords (e.g. coder, gamer, coffee)..." 
+                               value={bioKeywords} onChange={e => setBioKeywords(e.target.value)}
+                               className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-[11px] font-semibold outline-none focus:border-indigo-500/30" />
+                             <button onClick={handleGenerateBio} disabled={isGeneratingBio}
+                               className="px-4 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 rounded-xl text-[10px] font-black uppercase border border-indigo-500/20 transition-all flex items-center gap-2">
+                               {isGeneratingBio ? <RefreshCcw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} AI BIO
+                             </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
                     <div className="space-y-10">
                       <div>
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-4 block">HypeSquad Delegation</label>
-                        <div className="grid grid-cols-3 gap-4">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-5 block flex items-center gap-2"><Palette className="w-3 h-3" /> Profile Appearance</label>
+                        <div className="space-y-4">
+                           <div className="flex items-center gap-4 p-5 bg-slate-950 border border-slate-800 rounded-2xl">
+                              <div className="w-12 h-12 rounded-xl shadow-lg border border-white/5" style={{ backgroundColor: `#${(editingProfile.accent_color ?? (currentAccount as DiscordSession).profile?.accent_color ?? 0).toString(16).padStart(6, '0')}` }} />
+                              <div className="flex-1">
+                                 <input type="text" 
+                                    placeholder="Hex color (e.g. 5865F2)"
+                                    className="bg-transparent border-none text-sm font-mono font-bold w-full outline-none"
+                                    onChange={e => {
+                                      const val = e.target.value.replace('#', '');
+                                      if (val.length <= 6) {
+                                        const intVal = parseInt(val, 16);
+                                        if (!isNaN(intVal)) setEditingProfile(p => ({ ...p, accent_color: intVal }));
+                                      }
+                                    }}
+                                 />
+                                 <p className="text-[9px] text-slate-600 uppercase font-black tracking-widest mt-1">Accent Hex Override</p>
+                              </div>
+                           </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 mb-5 block flex items-center gap-2"><Flag className="w-3 h-3" /> HypeSquad Delegation</label>
+                        <div className="grid grid-cols-3 gap-3">
                           {[
                             { id: 1, name: 'Bravery', color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/20' },
                             { id: 2, name: 'Brilliance', color: 'text-red-400', bg: 'bg-red-400/10', border: 'border-red-400/20' },
@@ -382,20 +446,21 @@ const App: React.FC = () => {
                           ].map(house => (
                             <button key={house.id} 
                               onClick={() => standardWorkers.current.get(currentAccount.id)?.switchHypeSquad(house.id)}
-                              className={`flex flex-col items-center justify-center p-6 rounded-3xl border transition-all hover:scale-105 active:scale-95 ${house.bg} ${house.border}`}>
-                              <Flag className={`w-8 h-8 ${house.color} mb-2`} />
-                              <span className={`text-[10px] font-black uppercase ${house.color}`}>{house.name}</span>
+                              className={`flex flex-col items-center justify-center p-5 rounded-2xl border transition-all hover:scale-[1.03] active:scale-95 ${house.bg} ${house.border} group`}>
+                              <Flag className={`w-6 h-6 ${house.color} mb-2 group-hover:scale-110 transition-transform`} />
+                              <span className={`text-[8px] font-black uppercase ${house.color}`}>{house.name}</span>
                             </button>
                           ))}
                         </div>
                       </div>
 
-                      <div className="p-8 bg-slate-950 border border-slate-800 rounded-[2.5rem] shadow-inner">
+                      <div className="p-8 bg-slate-950 border border-slate-800 rounded-[2.5rem] shadow-inner relative overflow-hidden">
+                        <div className="absolute top-0 right-0 p-4 opacity-5"><Coffee className="w-16 h-16" /></div>
                         <h4 className="text-xs font-black uppercase text-slate-600 mb-6 flex items-center gap-2"><CreditCard className="w-4 h-4" /> Account Metadata</h4>
                         <div className="space-y-4 font-mono text-[10px]">
-                           <div className="flex justify-between"><span className="text-slate-600 uppercase">Internal ID:</span><span className="text-slate-300">{(currentAccount as DiscordSession).profile?.id || 'Locked'}</span></div>
-                           <div className="flex justify-between"><span className="text-slate-600 uppercase">Username:</span><span className="text-slate-300">{(currentAccount as DiscordSession).profile?.username || 'Locked'}</span></div>
-                           <div className="flex justify-between"><span className="text-slate-600 uppercase">Color Index:</span><span className="text-slate-300">#{(currentAccount as DiscordSession).profile?.accent_color?.toString(16) || 'None'}</span></div>
+                           <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">Internal ID:</span><span className="text-slate-300">{(currentAccount as DiscordSession).profile?.id || 'Locked'}</span></div>
+                           <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">Username:</span><span className="text-slate-300">{(currentAccount as DiscordSession).profile?.username || 'Locked'}</span></div>
+                           <div className="flex justify-between"><span className="text-slate-600 uppercase">Badges:</span><span className="text-emerald-500 uppercase font-black">Synced</span></div>
                         </div>
                       </div>
                     </div>
@@ -403,25 +468,33 @@ const App: React.FC = () => {
                 </section>
               )}
 
-              {/* Status and Telemetry */}
               <div className="space-y-10">
                 <section className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-8 shadow-xl">
                    <h3 className="text-sm font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-3"><Smile className="w-5 h-5 text-blue-400" /> Current Presence</h3>
-                   <div className="space-y-4">
-                      <div className="p-5 bg-slate-950 border border-slate-800 rounded-2xl flex items-center gap-4">
+                   <div className="space-y-6">
+                      <div className="p-5 bg-slate-950 border border-slate-800 rounded-2xl flex items-center gap-4 shadow-inner">
                         <span className="text-2xl">{(currentAccount as DiscordSession).statusEmoji}</span>
                         <p className="text-sm font-bold text-slate-200">"{(currentAccount as DiscordSession).customStatusText}"</p>
                       </div>
                       <div className="flex gap-2">
                         {['online', 'idle', 'dnd', 'invisible'].map(p => (
-                          <button key={p} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border ${(currentAccount as DiscordSession).presenceStatus === p ? 'bg-blue-600 border-blue-500' : 'bg-slate-950 border-slate-800 text-slate-600'}`}>{p}</button>
+                          <button key={p} 
+                            onClick={() => {
+                              if (selectedType === 'STANDARD') {
+                                setSessions(prev => prev.map(s => s.id === selectedId ? { ...s, presenceStatus: p as PresenceStatus } : s));
+                              }
+                            }}
+                            className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${(currentAccount as DiscordSession).presenceStatus === p ? 'bg-blue-600 border-blue-500 text-white shadow-lg' : 'bg-slate-950 border-slate-800 text-slate-600 hover:text-slate-400'}`}>{p}</button>
                         ))}
                       </div>
                    </div>
                 </section>
 
-                <section className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-8 shadow-xl">
-                   <h3 className="text-sm font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-3"><Activity className="w-5 h-5 text-emerald-400" /> Engine Pulse</h3>
+                <section className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-8 shadow-xl flex flex-col">
+                   <div className="flex items-center justify-between mb-6">
+                      <h3 className="text-sm font-black uppercase tracking-widest text-slate-500 flex items-center gap-3"><Activity className="w-5 h-5 text-emerald-400" /> Engine Pulse</h3>
+                      {currentAccount.proxyId && <span className="text-[9px] bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded border border-amber-500/20 font-black">PROXY ACTIVE</span>}
+                   </div>
                    <Console logs={currentAccount.logs} />
                 </section>
               </div>
@@ -429,15 +502,15 @@ const App: React.FC = () => {
           </div>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-20 text-center animate-in fade-in duration-1000">
-            <div className="w-40 h-40 bg-slate-900 rounded-[3.5rem] flex items-center justify-center border border-slate-800 shadow-3xl mb-12 relative">
-               <Layers className="w-20 h-20 text-slate-800" />
-               <div className="absolute inset-0 bg-indigo-500/5 rounded-[3.5rem] blur-3xl"></div>
+            <div className="w-40 h-40 bg-slate-900 rounded-[3.5rem] flex items-center justify-center border border-slate-800 shadow-3xl mb-12 relative group">
+               <Layers className="w-20 h-20 text-slate-800 group-hover:scale-110 transition-transform duration-700" />
+               <div className="absolute inset-0 bg-indigo-500/5 rounded-[3.5rem] blur-3xl group-hover:blur-[4rem] transition-all"></div>
             </div>
             <h2 className="text-6xl font-black tracking-tighter mb-6 uppercase italic">Lootify Onliner</h2>
-            <p className="text-slate-500 max-w-lg mx-auto leading-relaxed text-lg font-medium mb-12">Enterprise persistence for Discord clusters. Maintain 24/7 presence with advanced rotation and identity management.</p>
+            <p className="text-slate-500 max-w-lg mx-auto leading-relaxed text-lg font-medium mb-12">Enterprise cluster management for Discord persistent sessions. Maintain 24/7 presence with identity synchronization and advanced proxy routing.</p>
             <div className="flex gap-4">
-               <button onClick={() => { setAddType('STANDARD'); setIsAdding(true); }} className="px-10 py-6 bg-blue-600 text-white rounded-[1.75rem] font-black text-sm transition-all shadow-2xl uppercase">Deploy Standard</button>
-               <button onClick={() => { setAddType('ROTATOR'); setIsAdding(true); }} className="px-10 py-6 bg-purple-600 text-white rounded-[1.75rem] font-black text-sm transition-all shadow-2xl uppercase">Deploy Rotator</button>
+               <button onClick={() => { setAddType('STANDARD'); setIsAdding(true); }} className="px-12 py-6 bg-blue-600 hover:bg-blue-500 text-white rounded-[1.75rem] font-black text-sm transition-all shadow-2xl shadow-blue-600/20 active:scale-95 uppercase tracking-widest">Deploy Standard</button>
+               <button onClick={() => { setAddType('ROTATOR'); setIsAdding(true); }} className="px-12 py-6 bg-purple-600 hover:bg-purple-500 text-white rounded-[1.75rem] font-black text-sm transition-all shadow-2xl shadow-purple-600/20 active:scale-95 uppercase tracking-widest">Deploy Rotator</button>
             </div>
           </div>
         )}
