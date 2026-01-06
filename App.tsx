@@ -57,9 +57,19 @@ import {
 } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [sessions, setSessions] = useState<DiscordSession[]>([]);
-  const [rotatorSessions, setRotatorSessions] = useState<RotatorSession[]>([]);
-  const [proxies, setProxies] = useState<Proxy[]>([]);
+  // Load initial state from localStorage for persistence
+  const [sessions, setSessions] = useState<DiscordSession[]>(() => {
+    const saved = localStorage.getItem('lootify_sessions');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [rotatorSessions, setRotatorSessions] = useState<RotatorSession[]>(() => {
+    const saved = localStorage.getItem('lootify_rotator_sessions');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [proxies, setProxies] = useState<Proxy[]>(() => {
+    const saved = localStorage.getItem('lootify_proxies');
+    return saved ? JSON.parse(saved) : [];
+  });
   
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<AccountType | 'PROXY_VAULT'>('STANDARD');
@@ -88,9 +98,23 @@ const App: React.FC = () => {
 
   // Profile Management State
   const [editingProfile, setEditingProfile] = useState<Partial<DiscordUserProfile>>({});
+  const [isSyncingProfile, setIsSyncingProfile] = useState(false);
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
+
+  // Persistence: Sync state to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('lootify_sessions', JSON.stringify(sessions));
+  }, [sessions]);
+
+  useEffect(() => {
+    localStorage.setItem('lootify_rotator_sessions', JSON.stringify(rotatorSessions));
+  }, [rotatorSessions]);
+
+  useEffect(() => {
+    localStorage.setItem('lootify_proxies', JSON.stringify(proxies));
+  }, [proxies]);
 
   const getRelayUrl = () => {
     return (import.meta as any).env?.VITE_RELAY_URL || 
@@ -112,7 +136,6 @@ const App: React.FC = () => {
     } : s));
   }, []);
 
-  // Fixed typo: logEntry -> LogEntry
   const addRotatorLog = useCallback((id: string, log: LogEntry) => {
     setRotatorSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
   }, []);
@@ -329,7 +352,7 @@ const App: React.FC = () => {
 
   const formatUptime = (startTime: Date | null) => {
     if (!startTime) return '0 min';
-    const mins = Math.floor((new Date().getTime() - startTime.getTime()) / 60000);
+    const mins = Math.floor((new Date().getTime() - new Date(startTime).getTime()) / 60000);
     return mins > 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins} min`;
   };
 
@@ -337,9 +360,15 @@ const App: React.FC = () => {
     if (!selectedId || selectedType !== 'STANDARD') return;
     const worker = standardWorkers.current.get(selectedId);
     if (!worker) return alert("Account engine must be ONLINE to push profile updates.");
-    const success = await worker.updateProfile(editingProfile);
-    if (success) {
-      setEditingProfile({});
+    
+    setIsSyncingProfile(true);
+    try {
+      const success = await worker.updateProfile(editingProfile);
+      if (success) {
+        setEditingProfile({});
+      }
+    } finally {
+      setIsSyncingProfile(false);
     }
   };
 
@@ -725,8 +754,15 @@ const App: React.FC = () => {
                         <div className="p-3 bg-blue-500/10 rounded-2xl shadow-inner"><Edit3 className="w-6 h-6 text-blue-400" /></div>
                         <h3 className="font-black text-lg tracking-tight uppercase italic">Identity Suite</h3>
                       </div>
-                      <button onClick={handlePushProfileUpdate} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-[10px] uppercase transition-all shadow-xl flex items-center gap-2">
-                        <Save className="w-4 h-4" /> Persist Sync
+                      <button 
+                        onClick={handlePushProfileUpdate} 
+                        disabled={isSyncingProfile}
+                        className={`px-6 py-3 rounded-xl font-black text-[10px] uppercase transition-all shadow-xl flex items-center gap-2 ${
+                          isSyncingProfile ? 'bg-slate-800 text-slate-500' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                        }`}
+                      >
+                        {isSyncingProfile ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        {isSyncingProfile ? 'Syncing...' : 'Persist Sync'}
                       </button>
                    </div>
                    
@@ -779,7 +815,7 @@ const App: React.FC = () => {
                             <div className="space-y-4 font-mono text-[10px]">
                                <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">INTERNAL ID:</span><span className="text-slate-300">{(currentAccount as DiscordSession).profile?.id || 'Locked'}</span></div>
                                <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">USERNAME:</span><span className="text-slate-300">@{(currentAccount as DiscordSession).profile?.username || 'Locked'}</span></div>
-                               <div className="flex justify-between"><span className="text-slate-600 uppercase">ACCENT:</span><span className="text-blue-500 font-black">#{(currentAccount as DiscordSession).profile?.accent_color?.toString(16) || 'None'}</span></div>
+                               <div className="flex justify-between"><span className="text-slate-600 uppercase">ACCENT:</span><span className="text-blue-500 font-black">#{ (currentAccount as DiscordSession).profile?.accent_color ? (currentAccount as DiscordSession).profile?.accent_color?.toString(16) : 'None' }</span></div>
                             </div>
                          </div>
                       </div>

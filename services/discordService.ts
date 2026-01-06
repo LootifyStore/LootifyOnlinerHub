@@ -55,13 +55,13 @@ export class DiscordWorker {
   }
 
   /**
-   * Routes REST calls through the relay if a proxy is configured to bypass CORS and maintain IP consistency.
+   * Routes REST calls through the relay if a proxy is configured.
    */
   private async restRequest(method: string, endpoint: string, body?: any) {
     const url = `https://discord.com/api/v10${endpoint}`;
     
-    // If no relay is available, direct fetch will likely fail due to CORS on Discord's side for user accounts
-    if (!this.RELAY_URL) {
+    // Direct fetch as fallback (often fails CORS on Discord's side)
+    const directFetch = async () => {
       try {
         const res = await fetch(url, {
           method,
@@ -71,21 +71,29 @@ export class DiscordWorker {
           },
           body: body ? JSON.stringify(body) : undefined
         });
+        if (!res.ok) {
+           const errText = await res.text();
+           throw new Error(`HTTP ${res.status}: ${errText}`);
+        }
         return await res.json();
       } catch (e) {
-        this.log(`REST Request Failed (Direct): ${e}`, 'ERROR');
+        this.log(`REST direct failure: ${e}`, 'ERROR');
         return null;
       }
+    };
+
+    if (!this.RELAY_URL) {
+      return directFetch();
     }
 
-    // Use the relay to proxy the REST request
+    // Use the relay WebSocket bridge for REST proxying
     return new Promise((resolve) => {
       const restWs = new WebSocket(this.RELAY_URL);
       const timeout = setTimeout(() => {
         restWs.close();
-        this.log('Relay REST bridge timed out.', 'ERROR');
-        resolve(null);
-      }, 10000);
+        this.log('Relay REST bridge timed out. Switching to Direct...', 'DEBUG');
+        resolve(directFetch());
+      }, 8000);
 
       restWs.onopen = () => {
         restWs.send(JSON.stringify({
@@ -113,6 +121,9 @@ export class DiscordWorker {
           const data = JSON.parse(e.data);
           if (data.type === 'REST_RESULT') {
             resolve(data.data);
+          } else if (data.type === 'RELAY_ERROR') {
+             this.log(`Relay Node error: ${data.error}`, 'ERROR');
+             resolve(null);
           } else {
             resolve(null);
           }
@@ -124,42 +135,42 @@ export class DiscordWorker {
 
       restWs.onerror = () => {
         clearTimeout(timeout);
-        this.log('Relay REST bridge connection error.', 'ERROR');
-        resolve(null);
+        this.log('Relay REST bridge link failure.', 'ERROR');
+        resolve(directFetch());
         restWs.close();
       };
     });
   }
 
   public async updateProfile(data: Partial<DiscordUserProfile>) {
-    this.log(`Attempting identity sync for ${this.token.slice(0, 5)}...`, 'DEBUG');
+    this.log(`Syncing identity updates to Discord...`, 'DEBUG');
     
-    // Clean data to only include valid PATCH fields
+    // Clean data to only include valid PATCH fields for /users/@me
     const payload: any = {};
-    if (data.global_name !== undefined) payload.global_name = data.global_name;
-    if (data.bio !== undefined) payload.bio = data.bio;
+    if (data.global_name !== undefined) payload.global_name = data.global_name.trim() || null;
+    if (data.bio !== undefined) payload.bio = data.bio.trim();
     if (data.accent_color !== undefined) payload.accent_color = data.accent_color;
-    if (data.pronouns !== undefined) payload.pronouns = data.pronouns;
+    if (data.pronouns !== undefined) payload.pronouns = data.pronouns.trim();
 
     const result: any = await this.restRequest('PATCH', '/users/@me', payload);
-    if (result && result.id) {
-      this.log('Profile identity synced successfully.', 'SUCCESS');
+    if (result && (result.id || result.username)) {
+      this.log('Identity synchronized successfully.', 'SUCCESS');
       this.onUpdate(this.isConnected ? 'ONLINE' : 'CONNECTING', undefined, result);
       return true;
     }
     
-    const errorMsg = result?.message || JSON.stringify(result) || 'Unknown error';
-    this.log(`Identity sync failed: ${errorMsg}`, 'ERROR');
+    const errorMsg = result?.message || result?.errors?.bio?._errors?.[0]?.message || 'Target Refused Connection';
+    this.log(`Identity Sync Failed: ${errorMsg}`, 'ERROR');
     return false;
   }
 
   public async switchHypeSquad(houseId: number) {
-    this.log(`Transitioning HypeSquad house...`, 'DEBUG');
+    this.log(`Requesting HypeSquad affiliation change...`, 'DEBUG');
     const result: any = await this.restRequest('POST', '/hypesquad/online', { house_id: houseId });
     if (result && result.message) {
       this.log(`HypeSquad Error: ${result.message}`, 'ERROR');
     } else {
-      this.log(`HypeSquad house affiliation verified.`, 'SUCCESS');
+      this.log(`HypeSquad affiliation confirmed.`, 'SUCCESS');
     }
   }
 
@@ -170,7 +181,7 @@ export class DiscordWorker {
     const connectionUrl = (proxy && this.RELAY_URL) ? this.RELAY_URL : discordGateway;
 
     if (proxy && !this.RELAY_URL) {
-      this.log('Relay configuration missing. Proxies will not function.', 'ERROR');
+      this.log('Relay Node offline or missing. Direct link will be used.', 'ERROR');
     }
 
     const proxyIp = proxy?.ip || proxy?.host || 'DIRECT';
@@ -203,11 +214,11 @@ export class DiscordWorker {
         const payload = JSON.parse(event.data);
 
         if (payload.type === 'RELAY_READY') {
-          this.log('Relay Node Active. Authenticating...', 'SUCCESS');
+          this.log('Relay link verified. Establishing Discord Auth...', 'SUCCESS');
           return;
         }
         if (payload.type === 'RELAY_ERROR') {
-          this.log(`Relay Failure: ${payload.error}`, 'ERROR');
+          this.log(`Relay Handshake Failed: ${payload.error}`, 'ERROR');
           this.onUpdate('ERROR');
           return;
         }
@@ -235,19 +246,23 @@ export class DiscordWorker {
       };
 
       this.ws.onerror = () => {
-        this.log(`Network failure. Check Relay/Proxy.`, 'ERROR');
+        this.log(`WebSocket link failure. Verify token and network status.`, 'ERROR');
         this.onUpdate('ERROR');
       };
 
       this.ws.onclose = (event) => {
         this.isConnected = false;
         this.stopHeartbeat();
-        if (event.code !== 1000) this.reconnect();
-        else this.onUpdate('OFFLINE');
+        if (event.code !== 1000) {
+           this.log(`Socket closed (Code: ${event.code}). Attempting recovery...`, 'DEBUG');
+           this.reconnect();
+        } else {
+           this.onUpdate('OFFLINE');
+        }
       };
 
     } catch (error) {
-      this.log(`Fatal Error: ${error}`, 'ERROR');
+      this.log(`System Error: ${error}`, 'ERROR');
       this.onUpdate('ERROR');
     }
   }
