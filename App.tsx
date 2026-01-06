@@ -40,7 +40,10 @@ import {
   Wifi,
   MapPin,
   Check,
-  AlertCircle
+  AlertCircle,
+  ClipboardList,
+  FileText,
+  Import
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -61,6 +64,8 @@ const App: React.FC = () => {
   const [customInterval, setCustomInterval] = useState<string>('60');
 
   const [isAddingProxy, setIsAddingProxy] = useState(false);
+  const [isBulkImport, setIsBulkImport] = useState(false);
+  const [bulkInput, setBulkInput] = useState('');
   const [proxyAlias, setProxyAlias] = useState('');
   const [proxyHost, setProxyHost] = useState('');
   const [proxyPort, setProxyPort] = useState('8080');
@@ -71,7 +76,6 @@ const App: React.FC = () => {
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
 
-  // Robust detection for Vercel/Vite environment variables
   const getRelayUrl = () => {
     return (import.meta as any).env?.VITE_RELAY_URL || 
            (window as any).process?.env?.VITE_RELAY_URL || 
@@ -179,7 +183,7 @@ const App: React.FC = () => {
   const handleAddProxy = (e: React.FormEvent) => {
     e.preventDefault();
     if (!proxyHost || !proxyPort) return;
-    if (proxies.length >= 10) return alert("Maximum 10 proxies allowed.");
+    if (proxies.length >= 20) return alert("Maximum 20 proxies allowed in Vault.");
 
     const newProxy: Proxy = {
       id: crypto.randomUUID(),
@@ -194,6 +198,41 @@ const App: React.FC = () => {
 
     setProxies(p => [...p, newProxy]);
     setProxyAlias(''); setProxyHost(''); setProxyPort('8080'); setProxyUser(''); setProxyPass(''); setIsAddingProxy(false);
+  };
+
+  const handleBulkProxyImport = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkInput.trim()) return;
+
+    const lines = bulkInput.trim().split('\n');
+    const newProxies: Proxy[] = [];
+    let skipped = 0;
+
+    lines.forEach((line, index) => {
+      if (proxies.length + newProxies.length >= 20) {
+        skipped++;
+        return;
+      }
+
+      const parts = line.trim().split(':');
+      if (parts.length >= 2) {
+        newProxies.push({
+          id: crypto.randomUUID(),
+          alias: `Bulk ${proxies.length + newProxies.length + 1}`,
+          host: parts[0],
+          port: parseInt(parts[1]),
+          username: parts[2] || undefined,
+          password: parts[3] || undefined,
+          type: proxyType, // Uses the currently selected type in the form
+          testStatus: 'idle'
+        });
+      }
+    });
+
+    setProxies(prev => [...prev, ...newProxies]);
+    setBulkInput('');
+    setIsBulkImport(false);
+    if (skipped > 0) alert(`Imported ${newProxies.length} nodes. Skipped ${skipped} due to 20-node limit.`);
   };
 
   const testProxy = async (id: string) => {
@@ -313,7 +352,7 @@ const App: React.FC = () => {
                    <Globe className={`w-5 h-5 ${selectedType === 'PROXY_VAULT' ? 'text-amber-400' : 'text-slate-600 group-hover:text-amber-400'}`} />
                    <span className="text-xs font-black uppercase tracking-widest">Proxy Vault</span>
                 </div>
-                <span className="text-[10px] font-mono px-2 py-0.5 bg-slate-950 rounded-lg border border-slate-800">{proxies.length}/10</span>
+                <span className="text-[10px] font-mono px-2 py-0.5 bg-slate-950 rounded-lg border border-slate-800">{proxies.length}/20</span>
              </button>
           </div>
 
@@ -415,20 +454,49 @@ const App: React.FC = () => {
           </div>
         ) : selectedType === 'PROXY_VAULT' ? (
           <div className="p-10 max-w-6xl mx-auto w-full space-y-12">
-             <header className="flex items-center justify-between p-12 bg-gradient-to-br from-amber-600/10 to-[#0a0f1d] border border-amber-500/20 rounded-[3rem] shadow-2xl">
+             <header className="flex flex-col md:flex-row items-center justify-between p-12 bg-gradient-to-br from-amber-600/10 to-[#0a0f1d] border border-amber-500/20 rounded-[3rem] shadow-2xl gap-8">
                 <div className="flex items-center gap-10">
                    <div className="w-24 h-24 bg-amber-500/5 border border-amber-500/20 rounded-[2rem] flex items-center justify-center text-amber-500 shadow-inner">
                       <Globe className="w-12 h-12" />
                    </div>
                    <div>
                       <h2 className="text-5xl font-black tracking-tighter uppercase italic">Proxy Vault</h2>
-                      <p className="text-slate-500 text-xs font-black uppercase tracking-[0.3em] mt-2">Route your interactions through custom nodes</p>
+                      <p className="text-slate-500 text-xs font-black uppercase tracking-[0.3em] mt-2">Route your interactions through custom nodes ({proxies.length}/20)</p>
                    </div>
                 </div>
-                <button onClick={() => setIsAddingProxy(true)} className="px-10 py-5 bg-amber-600 hover:bg-amber-500 text-white rounded-[1.5rem] font-black text-sm flex items-center gap-3 transition-all shadow-2xl active:scale-95 uppercase tracking-widest">
-                   <Plus className="w-5 h-5" /> Register Node
-                </button>
+                <div className="flex gap-4">
+                  <button onClick={() => setIsBulkImport(true)} className="px-8 py-5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-[1.5rem] font-black text-sm flex items-center gap-3 transition-all border border-slate-800 uppercase tracking-widest">
+                    <ClipboardList className="w-5 h-5" /> Bulk Import
+                  </button>
+                  <button onClick={() => setIsAddingProxy(true)} className="px-10 py-5 bg-amber-600 hover:bg-amber-500 text-white rounded-[1.5rem] font-black text-sm flex items-center gap-3 transition-all shadow-2xl active:scale-95 uppercase tracking-widest">
+                    <Plus className="w-5 h-5" /> Register Node
+                  </button>
+                </div>
              </header>
+
+             {isBulkImport && (
+               <div className="bg-[#0a0f1d] border border-slate-800 rounded-[2.5rem] p-12 animate-in slide-in-from-bottom duration-500">
+                 <div className="flex items-center gap-4 mb-10 border-b border-slate-800 pb-6">
+                   <Import className="w-6 h-6 text-amber-400" />
+                   <h3 className="text-xl font-black uppercase tracking-tight">Bulk Proxy Ingest</h3>
+                 </div>
+                 <form onSubmit={handleBulkProxyImport} className="space-y-6">
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Format: Host:Port:User:Pass (One per line)</label>
+                      <textarea 
+                        placeholder="1.2.3.4:8080&#10;5.6.7.8:8080:user:pass" 
+                        value={bulkInput} 
+                        onChange={e => setBulkInput(e.target.value)}
+                        className="w-full h-48 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-mono focus:border-amber-500/50 outline-none transition-all custom-scrollbar resize-none"
+                      />
+                    </div>
+                    <div className="flex gap-4">
+                      <button type="button" onClick={() => setIsBulkImport(false)} className="flex-1 py-5 bg-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest border border-slate-800">Cancel</button>
+                      <button type="submit" className="flex-2 py-5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl">Process Batch</button>
+                    </div>
+                 </form>
+               </div>
+             )}
 
              {isAddingProxy ? (
                 <div className="bg-[#0a0f1d] border border-slate-800 rounded-[2.5rem] p-12 animate-in slide-in-from-bottom duration-500">
@@ -480,7 +548,7 @@ const App: React.FC = () => {
                    </form>
                 </div>
              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 pb-20">
                    {proxies.length === 0 ? (
                       <div className="col-span-full py-32 flex flex-col items-center justify-center bg-slate-900/20 border border-dashed border-slate-800 rounded-[3rem]">
                          <Server className="w-16 h-16 text-slate-800 mb-6" />
