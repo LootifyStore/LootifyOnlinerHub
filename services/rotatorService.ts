@@ -20,7 +20,8 @@ export class DiscordRotatorWorker {
   private config: RotatorConfig;
   private currentIndex: number = 0;
   
-  private RELAY_URL = (window as any).process?.env?.VITE_RELAY_URL || "";
+  // Reads the relay URL from Vercel/Vite environment variables
+  private RELAY_URL = (import.meta as any).env?.VITE_RELAY_URL || (window as any).process?.env?.VITE_RELAY_URL || "";
 
   constructor(
     token: string, 
@@ -50,7 +51,7 @@ export class DiscordRotatorWorker {
     const discordGateway = 'wss://gateway.discord.gg/?v=10&encoding=json';
     const connectionUrl = (proxy && this.RELAY_URL) ? this.RELAY_URL : discordGateway;
 
-    this.log(`[Engine] Initializing... ${proxy ? 'using Relay Node' : 'direct'}`, 'INFO');
+    this.log(`[Rotator] Booting... ${proxy ? 'via Relay Node' : 'direct connection'}`, 'INFO');
 
     try {
       this.ws = new WebSocket(connectionUrl);
@@ -75,11 +76,11 @@ export class DiscordRotatorWorker {
         const payload = JSON.parse(event.data);
 
         if (payload.type === 'RELAY_READY') {
-          this.log('Relay Link established.', 'SUCCESS');
+          this.log('Relay handshake complete.', 'SUCCESS');
           return;
         }
         if (payload.type === 'RELAY_ERROR') {
-          this.log(`Relay Node Error: ${payload.error}`, 'ERROR');
+          this.log(`Relay Failure: ${payload.error}`, 'ERROR');
           this.onUpdate('ERROR');
           return;
         }
@@ -96,7 +97,7 @@ export class DiscordRotatorWorker {
           case 0: // Dispatch
             if (t === 'READY') {
               this.isConnected = true;
-              this.log(`Authorized: ${d.user.username}`, 'SUCCESS');
+              this.log(`Authenticated: ${d.user.username}`, 'SUCCESS');
               this.onUpdate('ONLINE');
               this.updatePresence(this.config.statusList[0] || 'Active');
               setTimeout(() => this.startRotation(), 2000);
@@ -117,7 +118,7 @@ export class DiscordRotatorWorker {
       };
 
     } catch (e) {
-      this.log(`Start error: ${e}`, 'ERROR');
+      this.log(`Engine failure: ${e}`, 'ERROR');
       this.onUpdate('ERROR');
     }
   }

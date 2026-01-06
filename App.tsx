@@ -71,7 +71,12 @@ const App: React.FC = () => {
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
 
-  const RELAY_URL = (window as any).process?.env?.VITE_RELAY_URL || "";
+  // Robust detection for Vercel/Vite environment variables
+  const getRelayUrl = () => {
+    return (import.meta as any).env?.VITE_RELAY_URL || 
+           (window as any).process?.env?.VITE_RELAY_URL || 
+           "";
+  };
 
   const addStandardLog = useCallback((id: string, log: LogEntry) => {
     setSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
@@ -197,14 +202,15 @@ const App: React.FC = () => {
     
     setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'testing' } : item));
     
-    if (!RELAY_URL) {
+    const relayUrl = getRelayUrl();
+    if (!relayUrl) {
       alert("Proxy Testing requires VITE_RELAY_URL to be configured in Vercel settings.");
       setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
       return;
     }
 
     try {
-      const testWs = new WebSocket(RELAY_URL);
+      const testWs = new WebSocket(relayUrl);
       
       const timeout = setTimeout(() => {
         if (testWs.readyState !== WebSocket.CLOSED) {

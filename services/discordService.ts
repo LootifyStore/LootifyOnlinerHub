@@ -18,8 +18,8 @@ export class DiscordWorker {
   private onUpdate: (status: ConnectionStatus, log?: LogEntry) => void;
   private isConnected: boolean = false;
   
-  // Reads the relay URL from Vercel environment variables
-  private RELAY_URL = (window as any).process?.env?.VITE_RELAY_URL || "";
+  // Reads the relay URL from Vercel/Vite environment variables
+  private RELAY_URL = (import.meta as any).env?.VITE_RELAY_URL || (window as any).process?.env?.VITE_RELAY_URL || "";
 
   private config: WorkerConfig = {
     status: 'online',
@@ -54,17 +54,16 @@ export class DiscordWorker {
     
     const discordGateway = 'wss://gateway.discord.gg/?v=10&encoding=json';
     
-    // If a proxy is used, we connect to our RENDER RELAY. 
-    // If no proxy, we connect DIRECTLY to Discord.
+    // Use Relay URL if proxy is present, otherwise direct
     const connectionUrl = (proxy && this.RELAY_URL) ? this.RELAY_URL : discordGateway;
 
     if (proxy && !this.RELAY_URL) {
-      this.log('Proxy selected but VITE_RELAY_URL is missing in Vercel. Using direct IP.', 'ERROR');
+      this.log('Relay configuration missing. Proxies will not function.', 'ERROR');
     }
 
     this.onUpdate('CONNECTING', { 
       timestamp: new Date(), 
-      message: proxy ? `Initiating Relay via Node [${proxy.alias}]...` : `Establishing Direct Discord Link...`, 
+      message: proxy ? `Routing via Relay [${proxy.alias}]...` : `Establishing Direct Discord Link...`, 
       type: 'INFO' 
     });
 
@@ -73,7 +72,7 @@ export class DiscordWorker {
 
       this.ws.onopen = () => {
         if (proxy && this.RELAY_URL) {
-          this.log('Relay Handshake: Sending proxy credentials to Render Node...', 'DEBUG');
+          this.log('Relay Handshake: Syncing proxy credentials...', 'DEBUG');
           this.ws?.send(JSON.stringify({
             type: 'INIT_PROXY',
             target: discordGateway,
@@ -91,13 +90,12 @@ export class DiscordWorker {
       this.ws.onmessage = (event) => {
         const payload = JSON.parse(event.data);
 
-        // Control messages from our Render Backend
         if (payload.type === 'RELAY_READY') {
-          this.log('Relay success. Proxy tunnel established to Discord.', 'SUCCESS');
+          this.log('Relay Node Active. Authenticating with Discord...', 'SUCCESS');
           return;
         }
         if (payload.type === 'RELAY_ERROR') {
-          this.log(`Relay Failed: ${payload.error}`, 'ERROR');
+          this.log(`Relay Failure: ${payload.error}`, 'ERROR');
           this.onUpdate('ERROR');
           return;
         }
@@ -125,22 +123,19 @@ export class DiscordWorker {
       };
 
       this.ws.onerror = () => {
-        this.log(`Connection error. Check your Proxy or Relay URL.`, 'ERROR');
+        this.log(`Network failure. Verify Relay/Proxy status.`, 'ERROR');
         this.onUpdate('ERROR');
       };
 
       this.ws.onclose = (event) => {
         this.isConnected = false;
         this.stopHeartbeat();
-        if (event.code !== 1000) {
-          this.reconnect();
-        } else {
-          this.onUpdate('OFFLINE');
-        }
+        if (event.code !== 1000) this.reconnect();
+        else this.onUpdate('OFFLINE');
       };
 
     } catch (error) {
-      this.log(`Critical Error: ${error}`, 'ERROR');
+      this.log(`Fatal Error: ${error}`, 'ERROR');
       this.onUpdate('ERROR');
     }
   }
