@@ -53,11 +53,7 @@ import {
   Palette,
   Flag,
   Save,
-  CreditCard,
-  Cloud,
-  HardDrive,
-  Cpu,
-  ExternalLink
+  CreditCard
 } from 'lucide-react';
 
 // Helper to revive dates from localStorage
@@ -106,14 +102,12 @@ const App: React.FC = () => {
   const [renameValue, setRenameValue] = useState('');
   const [editingProfile, setEditingProfile] = useState<Partial<DiscordUserProfile>>({});
   const [isSyncingProfile, setIsSyncingProfile] = useState(false);
-  const [showRelayHelp, setShowRelayHelp] = useState(false);
-  const [relayHealth, setRelayHealth] = useState<'idle' | 'online' | 'offline'>('idle');
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
   const hasAutoResumed = useRef(false);
 
-  // Persistence: Sync state
+  // Persistence: Sync state to localStorage
   useEffect(() => {
     localStorage.setItem('lootify_sessions', JSON.stringify(sessions));
   }, [sessions]);
@@ -126,39 +120,12 @@ const App: React.FC = () => {
     localStorage.setItem('lootify_proxies', JSON.stringify(proxies));
   }, [proxies]);
 
-  const getRelayUrl = () => {
-    return (import.meta as any).env?.VITE_RELAY_URL || 
-           (window as any).process?.env?.VITE_RELAY_URL || 
-           "";
-  };
-
-  // Relay Health Check
-  useEffect(() => {
-    const url = getRelayUrl();
-    if (!url) {
-      setRelayHealth('offline');
-      return;
-    }
-
-    const check = () => {
-      try {
-        const ws = new WebSocket(url);
-        ws.onopen = () => { setRelayHealth('online'); ws.close(); };
-        ws.onerror = () => { setRelayHealth('offline'); };
-      } catch (e) {
-        setRelayHealth('offline');
-      }
-    };
-
-    check();
-    const interval = setInterval(check, 60000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // AUTO-RESUME ENGINE
+  // AUTO-RESUME ENGINE: Restarts workers that were online before refresh
   useEffect(() => {
     if (hasAutoResumed.current) return;
     hasAutoResumed.current = true;
+
+    console.log("Lootify: Executing Auto-Resume sequence...");
     
     sessions.forEach(s => {
       if (s.status === 'ONLINE' || s.status === 'CONNECTING') {
@@ -172,6 +139,12 @@ const App: React.FC = () => {
       }
     });
   }, []);
+
+  const getRelayUrl = () => {
+    return (import.meta as any).env?.VITE_RELAY_URL || 
+           (window as any).process?.env?.VITE_RELAY_URL || 
+           "";
+  };
 
   const addStandardLog = useCallback((id: string, log: LogEntry) => {
     setSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
@@ -201,7 +174,9 @@ const App: React.FC = () => {
   }, []);
 
   const startStandard = (id: string) => {
+    // Optimization: Don't restart if already active in ref
     if (standardWorkers.current.has(id)) return;
+
     const s = sessions.find(x => x.id === id);
     if (!s) return;
     const proxy = proxies.find(p => p.id === s.proxyId);
@@ -226,6 +201,7 @@ const App: React.FC = () => {
 
   const startRotator = (id: string) => {
     if (rotatorWorkers.current.has(id)) return;
+
     const s = rotatorSessions.find(x => x.id === id);
     if (!s) return;
     const proxy = proxies.find(p => p.id === s.proxyId);
@@ -282,7 +258,10 @@ const App: React.FC = () => {
   };
 
   const handleRename = () => {
-    if (!editingId || !renameValue.trim()) { setEditingId(null); return; }
+    if (!editingId || !renameValue.trim()) {
+      setEditingId(null);
+      return;
+    }
     setSessions(prev => prev.map(s => s.id === editingId ? { ...s, label: renameValue } : s));
     setRotatorSessions(prev => prev.map(s => s.id === editingId ? { ...s, label: renameValue } : s));
     setProxies(prev => prev.map(p => p.id === editingId ? { ...p, alias: renameValue } : p));
@@ -292,11 +271,19 @@ const App: React.FC = () => {
   const handleAddProxy = (e: React.FormEvent) => {
     e.preventDefault();
     if (!proxyHost || !proxyPort) return;
+    if (proxies.length >= 20) return alert("Maximum 20 proxies allowed in Vault.");
+
     const newProxy: Proxy = {
-      id: crypto.randomUUID(), alias: proxyAlias || `Proxy ${proxies.length + 1}`,
-      host: proxyHost, port: parseInt(proxyPort), username: proxyUser, password: proxyPass,
-      type: proxyType, testStatus: 'idle'
+      id: crypto.randomUUID(),
+      alias: proxyAlias || `Proxy ${proxies.length + 1}`,
+      host: proxyHost,
+      port: parseInt(proxyPort),
+      username: proxyUser,
+      password: proxyPass,
+      type: proxyType,
+      testStatus: 'idle'
     };
+
     setProxies(p => [...p, newProxy]);
     setProxyAlias(''); setProxyHost(''); setProxyPort('8080'); setProxyUser(''); setProxyPass(''); setIsAddingProxy(false);
   };
@@ -306,18 +293,71 @@ const App: React.FC = () => {
     if (!bulkInput.trim()) return;
     const lines = bulkInput.trim().split('\n');
     const newProxies: Proxy[] = [];
+    let skipped = 0;
     lines.forEach((line) => {
+      if (proxies.length + newProxies.length >= 20) { skipped++; return; }
       const parts = line.trim().split(':');
       if (parts.length >= 2) {
         newProxies.push({
-          id: crypto.randomUUID(), alias: `${parts[0]} [${parts[1]}]`,
-          host: parts[0], port: parseInt(parts[1]), username: parts[2] || undefined,
-          password: parts[3] || undefined, type: proxyType, testStatus: 'idle'
+          id: crypto.randomUUID(),
+          alias: `${parts[0]} [${parts[1]}]`,
+          host: parts[0],
+          port: parseInt(parts[1]),
+          username: parts[2] || undefined,
+          password: parts[3] || undefined,
+          type: proxyType,
+          testStatus: 'idle'
         });
       }
     });
     setProxies(prev => [...prev, ...newProxies]);
-    setBulkInput(''); setIsBulkImport(false);
+    setBulkInput('');
+    setIsBulkImport(false);
+    if (skipped > 0) alert(`Imported ${newProxies.length} nodes. Skipped ${skipped} due to 20-node limit.`);
+  };
+
+  const testProxy = async (id: string) => {
+    const p = proxies.find(x => x.id === id);
+    if (!p) return;
+    setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'testing' } : item));
+    const relayUrl = getRelayUrl();
+    if (!relayUrl) {
+      alert("Proxy Testing requires VITE_RELAY_URL to be configured in Vercel settings.");
+      setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+      return;
+    }
+    try {
+      const testWs = new WebSocket(relayUrl);
+      const timeout = setTimeout(() => {
+        if (testWs.readyState !== WebSocket.CLOSED) {
+          testWs.close();
+          setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+        }
+      }, 15000);
+      testWs.onopen = () => {
+        testWs.send(JSON.stringify({
+          type: 'TEST_PROXY',
+          proxy: { host: p.host, port: p.port, username: p.username, password: p.password, type: p.type }
+        }));
+      };
+      testWs.onmessage = (event) => {
+        clearTimeout(timeout);
+        const data = JSON.parse(event.data);
+        if (data.type === 'TEST_RESULT') {
+          setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'success', ip: data.ip, country: data.country } : item));
+          testWs.close();
+        } else if (data.type === 'RELAY_ERROR') {
+          setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+          testWs.close();
+        }
+      };
+      testWs.onerror = () => {
+        clearTimeout(timeout);
+        setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+      };
+    } catch (e) {
+      setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
+    }
   };
 
   const removeAccount = (id: string, type: AccountType) => {
@@ -350,11 +390,16 @@ const App: React.FC = () => {
     if (!selectedId || selectedType !== 'STANDARD') return;
     const worker = standardWorkers.current.get(selectedId);
     if (!worker) return alert("Account engine must be ONLINE to push profile updates.");
+    
     setIsSyncingProfile(true);
     try {
       const success = await worker.updateProfile(editingProfile);
-      if (success) setEditingProfile({});
-    } finally { setIsSyncingProfile(false); }
+      if (success) {
+        setEditingProfile({});
+      }
+    } finally {
+      setIsSyncingProfile(false);
+    }
   };
 
   const handleHypeSquadJoin = (houseId: number) => {
@@ -370,7 +415,7 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#050810] text-slate-100 font-sans">
-      <aside className="w-80 bg-[#0a0f1d] border-r border-slate-800/40 flex flex-col shrink-0 shadow-2xl relative">
+      <aside className="w-80 bg-[#0a0f1d] border-r border-slate-800/40 flex flex-col shrink-0 shadow-2xl">
         <div className="p-8 border-b border-slate-800/40 flex items-center gap-4">
           <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
             <Layers className="w-7 h-7 text-white" />
@@ -385,28 +430,12 @@ const App: React.FC = () => {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-8 px-4 space-y-10 custom-scrollbar">
-          {/* Infrastructure Monitor */}
-          <div className="space-y-3">
-             <div className="px-4 flex items-center justify-between">
-                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Infrastructure</span>
-                <button onClick={() => setShowRelayHelp(true)} className="p-1 text-slate-600 hover:text-indigo-400 transition-colors"><Info className="w-3.5 h-3.5" /></button>
-             </div>
-             <div className={`p-5 rounded-2xl border transition-all ${getRelayUrl() ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
-                <div className="flex items-center justify-between mb-4">
-                   <div className="flex items-center gap-3">
-                      <Cloud className={`w-4 h-4 ${getRelayUrl() ? 'text-indigo-400' : 'text-red-400'}`} />
-                      <span className="text-[10px] font-black uppercase tracking-widest">{getRelayUrl() ? 'Persistent Node' : 'Browser Only'}</span>
-                   </div>
-                   <div className={`w-2 h-2 rounded-full ${relayHealth === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-                </div>
-                {!getRelayUrl() && (
-                  <p className="text-[8px] text-slate-500 font-bold uppercase leading-relaxed mb-3">24/7 Mode Disengaged. Engines will stop when tab is closed.</p>
-                )}
-                <div className="flex items-center justify-between text-[8px] font-mono text-slate-600">
-                   <span className="flex items-center gap-1"><HardDrive className="w-2.5 h-2.5" /> VER-SRV-01</span>
-                   <span>{relayHealth === 'online' ? 'LTC: 42ms' : 'LTC: INF'}</span>
-                </div>
-             </div>
+          <div className="px-4 py-3 bg-indigo-500/5 border border-indigo-500/10 rounded-2xl flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Shield className="w-4 h-4 text-indigo-400" />
+              <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300">Auto-Resume</span>
+            </div>
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
           </div>
 
           <div>
@@ -443,6 +472,7 @@ const App: React.FC = () => {
                   >
                     <div className="relative shrink-0">
                       <div className={`w-2.5 h-2.5 rounded-full ${s.status === 'ONLINE' ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-700'}`} />
+                      {s.proxyId && <Globe className="absolute -top-1 -right-1 w-2 h-2 text-amber-500" />}
                     </div>
                     {editingId === s.id ? (
                       <input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onBlur={handleRename} onKeyDown={e => e.key === 'Enter' && handleRename()}
@@ -475,6 +505,7 @@ const App: React.FC = () => {
                   >
                     <div className="relative shrink-0">
                       <RotateCw className={`w-3.5 h-3.5 ${s.status === 'ONLINE' ? 'text-purple-400 animate-spin-slow' : 'text-slate-700'}`} />
+                      {s.proxyId && <Globe className="absolute -top-1 -right-1 w-2 h-2 text-amber-500" />}
                     </div>
                     {editingId === s.id ? (
                       <input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onBlur={handleRename} onKeyDown={e => e.key === 'Enter' && handleRename()}
@@ -482,6 +513,7 @@ const App: React.FC = () => {
                     ) : (
                       <span className="text-sm font-bold truncate flex-1 text-left">{s.label}</span>
                     )}
+                    {!editingId && <span className="text-[10px] font-mono opacity-40">{s.statusList.length}Q</span>}
                   </button>
                 </div>
               ))}
@@ -491,68 +523,40 @@ const App: React.FC = () => {
       </aside>
 
       <main className="flex-1 overflow-y-auto flex flex-col relative">
-        {/* Help Modal */}
-        {showRelayHelp && (
-           <div className="fixed inset-0 z-50 flex items-center justify-center p-12 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-300">
-              <div className="w-full max-w-2xl bg-[#0a0f1d] border border-indigo-500/30 rounded-[3rem] p-12 shadow-3xl relative overflow-hidden">
-                 <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none"><Cloud className="w-64 h-64 text-indigo-500" /></div>
-                 <div className="relative z-10">
-                    <div className="flex items-center gap-4 mb-8">
-                       <div className="p-4 bg-indigo-500/10 rounded-2xl border border-indigo-500/20"><Zap className="w-8 h-8 text-indigo-400" /></div>
-                       <h2 className="text-3xl font-black uppercase italic tracking-tighter">True 24/7 Guide</h2>
-                    </div>
-                    <div className="space-y-6 text-slate-400 leading-relaxed font-medium">
-                       <p>Because <span className="text-white font-bold italic">Vercel</span> is a Serverless platform, your accounts normally disconnect when you close this browser tab. To fix this, you need a <span className="text-indigo-400">Persistent Relay Backend</span>.</p>
-                       <div className="p-6 bg-slate-900/50 rounded-3xl border border-slate-800 space-y-4">
-                          <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500">How to deploy Relay:</h4>
-                          <ol className="list-decimal list-inside space-y-3 text-xs">
-                             <li>Clone the <span className="text-white">Lootify Relay</span> repository.</li>
-                             <li>Host it on <span className="text-white">Replit (Hacker Plan)</span> or a <span className="text-white">VPS</span>.</li>
-                             <li>Set the <span className="text-indigo-400">VITE_RELAY_URL</span> environment variable in Vercel.</li>
-                             <li>Deploy. Lootify will now hand off workers to your server.</li>
-                          </ol>
-                       </div>
-                       <div className="flex gap-4 pt-6">
-                          <button onClick={() => setShowRelayHelp(false)} className="flex-1 py-5 bg-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest border border-slate-800 hover:bg-slate-800 transition-all">Close System Brief</button>
-                          <a href="https://github.com/4realwilly/Discord-247-Onliner.git" target="_blank" className="flex-1 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest text-center flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/20"><ExternalLink className="w-4 h-4" /> View Backend Repo</a>
-                       </div>
-                    </div>
-                 </div>
-              </div>
-           </div>
-        )}
-
         {isAdding ? (
           <div className="flex-1 flex items-center justify-center p-12">
             <div className={`w-full max-w-lg bg-[#0a0f1d] border rounded-[3rem] p-12 shadow-3xl transition-all ${addType === 'ROTATOR' ? 'border-purple-500/20' : 'border-blue-500/20'}`}>
               <div className={`w-20 h-20 rounded-[2rem] flex items-center justify-center mx-auto mb-8 border ${addType === 'ROTATOR' ? 'bg-purple-500/10 border-purple-500/20' : 'bg-blue-500/10 border-blue-500/20'}`}>
                 {addType === 'ROTATOR' ? <RotateCw className="w-10 h-10 text-purple-400" /> : <Layers className="w-10 h-10 text-blue-400" />}
               </div>
-              <h2 className="text-3xl font-black mb-2 text-center tracking-tighter uppercase italic">Authorize Node</h2>
-              <form onSubmit={handleAdd} className="space-y-6 mt-10">
+              <h2 className="text-3xl font-black mb-2 text-center tracking-tighter uppercase">Initialize {addType === 'ROTATOR' ? 'Rotator' : 'Onliner'}</h2>
+              <p className="text-center text-slate-500 text-sm mb-10 font-medium tracking-tight">Sync your Discord Token securely with Lootify Onliner.</p>
+              <form onSubmit={handleAdd} className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
                    <div className="space-y-3">
                     <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Alias</label>
                     <input type="text" placeholder="e.g. Main Acc" value={newLabel} onChange={e => setNewLabel(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-blue-500/40 font-semibold" />
+                      className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:ring-4 focus:ring-blue-500/5 focus:border-blue-500/40 font-semibold" />
                   </div>
                   <div className="space-y-3">
-                    <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Proxy Link</label>
+                    <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Route intelligence</label>
                     <select value={selectedProxyId} onChange={e => setSelectedProxyId(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:outline-none focus:border-blue-500/40 font-semibold appearance-none text-slate-400"
                     >
-                      <option value="">Direct Node</option>
-                      {proxies.map(p => (<option key={p.id} value={p.id}>{p.alias}</option>))}
+                      <option value="">Direct Connection</option>
+                      {proxies.map(p => (
+                        <option key={p.id} value={p.id}>{p.alias} ({p.type})</option>
+                      ))}
                     </select>
                   </div>
                 </div>
                 <div className="space-y-3">
                   <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Discord Token</label>
                   <input type="password" placeholder="MTAz..." value={newToken} onChange={e => setNewToken(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-sm focus:outline-none focus:border-blue-500/40 font-mono" />
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-sm focus:outline-none focus:ring-4 focus:ring-blue-500/5 focus:border-blue-500/40 font-mono" />
                 </div>
                 <div className="flex gap-4 pt-6">
-                  <button type="button" onClick={() => setIsAdding(false)} className="flex-1 py-5 bg-slate-900 rounded-[1.5rem] font-bold text-sm border border-slate-800 shadow-lg uppercase tracking-widest">Discard</button>
+                  <button type="button" onClick={() => setIsAdding(false)} className="flex-1 py-5 bg-slate-900 hover:bg-slate-800 rounded-[1.5rem] font-bold text-sm transition-all border border-slate-800 shadow-lg uppercase tracking-widest">Discard</button>
                   <button type="submit" className={`flex-1 py-5 rounded-[1.5rem] font-black text-sm transition-all shadow-2xl uppercase tracking-widest ${addType === 'ROTATOR' ? 'bg-purple-600 hover:bg-purple-500 shadow-purple-600/20' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/20'}`}>Authorize</button>
                 </div>
               </form>
@@ -567,7 +571,7 @@ const App: React.FC = () => {
                    </div>
                    <div>
                       <h2 className="text-5xl font-black tracking-tighter uppercase italic">Proxy Vault</h2>
-                      <p className="text-slate-500 text-xs font-black uppercase tracking-[0.3em] mt-2">Custom routes for your deployment ({proxies.length}/20)</p>
+                      <p className="text-slate-500 text-xs font-black uppercase tracking-[0.3em] mt-2">Route interactions through custom nodes ({proxies.length}/20)</p>
                    </div>
                 </div>
                 <div className="flex gap-4">
@@ -580,7 +584,7 @@ const App: React.FC = () => {
                 </div>
              </header>
 
-             {isBulkImport ? (
+             {isBulkImport && (
                <div className="bg-[#0a0f1d] border border-slate-800 rounded-[2.5rem] p-12 animate-in slide-in-from-bottom duration-500">
                  <div className="flex items-center gap-4 mb-10 border-b border-slate-800 pb-6">
                    <Import className="w-6 h-6 text-amber-400" />
@@ -588,18 +592,20 @@ const App: React.FC = () => {
                  </div>
                  <form onSubmit={handleBulkProxyImport} className="space-y-6">
                     <div className="space-y-3">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Format: Host:Port:User:Pass</label>
-                      <textarea placeholder="1.2.3.4:8080" value={bulkInput} onChange={e => setBulkInput(e.target.value)}
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Format: Host:Port:User:Pass (One per line)</label>
+                      <textarea placeholder="1.2.3.4:8080&#10;5.6.7.8:8080:user:pass" value={bulkInput} onChange={e => setBulkInput(e.target.value)}
                         className="w-full h-48 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-mono focus:border-amber-500/50 outline-none transition-all custom-scrollbar resize-none"
                       />
                     </div>
                     <div className="flex gap-4">
                       <button type="button" onClick={() => setIsBulkImport(false)} className="flex-1 py-5 bg-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest border border-slate-800">Cancel</button>
-                      <button type="submit" className="flex-2 py-5 bg-amber-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest">Process Batch</button>
+                      <button type="submit" className="flex-2 py-5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl">Process Batch</button>
                     </div>
                  </form>
                </div>
-             ) : isAddingProxy ? (
+             )}
+
+             {isAddingProxy ? (
                 <div className="bg-[#0a0f1d] border border-slate-800 rounded-[2.5rem] p-12 animate-in slide-in-from-bottom duration-500">
                    <div className="flex items-center gap-4 mb-10 border-b border-slate-800 pb-6">
                       <Shield className="w-6 h-6 text-amber-400" />
@@ -617,14 +623,14 @@ const App: React.FC = () => {
                             {(['HTTP', 'SOCKS5'] as ProxyType[]).map(t => (
                                <button key={t} type="button" onClick={() => setProxyType(t)}
                                   className={`flex-1 py-4 rounded-2xl text-[11px] font-black border transition-all ${
-                                     proxyType === t ? 'bg-amber-500 border-amber-400 text-white shadow-lg' : 'bg-slate-950 border-slate-800 text-slate-500'
+                                     proxyType === t ? 'bg-amber-500 border-amber-400 text-white shadow-lg shadow-amber-500/20' : 'bg-slate-950 border-slate-800 text-slate-500'
                                   }`}>{t}</button>
                             ))}
                          </div>
                       </div>
                       <div className="space-y-3">
                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Host Address</label>
-                         <input type="text" placeholder="127.0.0.1" value={proxyHost} onChange={e => setProxyHost(e.target.value)} required
+                         <input type="text" placeholder="127.0.0.1 or domain.com" value={proxyHost} onChange={e => setProxyHost(e.target.value)} required
                             className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-mono focus:border-amber-500/50 outline-none transition-all" />
                       </div>
                       <div className="space-y-3">
@@ -632,9 +638,19 @@ const App: React.FC = () => {
                          <input type="number" placeholder="8080" value={proxyPort} onChange={e => setProxyPort(e.target.value)} required
                             className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-mono focus:border-amber-500/50 outline-none transition-all" />
                       </div>
+                      <div className="space-y-3">
+                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Username (Optional)</label>
+                         <input type="text" value={proxyUser} onChange={e => setProxyUser(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-amber-500/50 outline-none transition-all" />
+                      </div>
+                      <div className="space-y-3">
+                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Password (Optional)</label>
+                         <input type="password" value={proxyPass} onChange={e => setProxyPass(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-amber-500/50 outline-none transition-all" />
+                      </div>
                       <div className="md:col-span-2 flex gap-4 pt-6 border-t border-slate-800 mt-4">
-                         <button type="button" onClick={() => setIsAddingProxy(false)} className="flex-1 py-5 bg-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest border border-slate-800">Cancel</button>
-                         <button type="submit" className="flex-1 py-5 bg-amber-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl">Secure Node</button>
+                         <button type="button" onClick={() => setIsAddingProxy(false)} className="flex-1 py-5 bg-slate-900 hover:bg-slate-800 rounded-2xl font-black text-xs uppercase tracking-widest transition-all border border-slate-800">Cancel</button>
+                         <button type="submit" className="flex-1 py-5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl shadow-amber-600/20">Secure & Save Node</button>
                       </div>
                    </form>
                 </div>
@@ -646,16 +662,64 @@ const App: React.FC = () => {
                          <p className="text-slate-500 font-bold uppercase tracking-widest text-sm">No proxy nodes registered yet.</p>
                       </div>
                    ) : proxies.map(p => (
-                      <div key={p.id} className="bg-slate-950 border border-slate-800 rounded-[2.5rem] p-8 flex flex-col justify-between group hover:border-amber-500/40 transition-all shadow-xl min-h-[400px]">
+                      <div key={p.id} className="bg-slate-950 border border-slate-800 rounded-[2.5rem] p-8 flex flex-col justify-between group hover:border-amber-500/40 transition-all shadow-xl min-h-[420px]">
                          <div>
                             <div className="flex items-center justify-between mb-8">
                                <div className="px-4 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded-full text-[10px] font-black text-amber-500 uppercase tracking-widest">{p.type}</div>
-                               <button onClick={() => removeProxy(p.id)} className="p-2.5 text-slate-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"><Trash2 className="w-4 h-4" /></button>
+                               <div className="flex items-center gap-2">
+                                  <button onClick={() => testProxy(p.id)} disabled={p.testStatus === 'testing'}
+                                    className={`p-2.5 rounded-xl transition-all border ${
+                                      p.testStatus === 'testing' ? 'bg-amber-500/20 text-amber-500 animate-pulse border-amber-500/30' : 
+                                      p.testStatus === 'success' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20' :
+                                      p.testStatus === 'failed' ? 'bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20' :
+                                      'bg-slate-800/50 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 border-slate-700/50'
+                                    }`}>
+                                    <Wifi className={`w-4 h-4 ${p.testStatus === 'testing' && 'animate-bounce'}`} />
+                                  </button>
+                                  <button onClick={() => removeProxy(p.id)} className="p-2.5 text-slate-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all border border-transparent hover:border-red-500/20"><Trash2 className="w-4 h-4" /></button>
+                               </div>
                             </div>
-                            <h4 className="text-2xl font-black tracking-tighter uppercase mb-2 truncate cursor-pointer hover:text-amber-400 transition-colors">{p.alias}</h4>
+                            {editingId === p.id ? (
+                               <input autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)} onBlur={handleRename} onKeyDown={e => e.key === 'Enter' && handleRename()}
+                                 className="bg-slate-950 border border-amber-500 text-2xl font-black rounded px-2 py-0.5 w-full outline-none uppercase tracking-tighter" />
+                            ) : (
+                               <h4 onDoubleClick={() => { setEditingId(p.id); setRenameValue(p.alias); }} className="text-2xl font-black tracking-tighter uppercase mb-2 truncate cursor-pointer hover:text-amber-400 transition-colors">{p.alias}</h4>
+                            )}
+                            {p.testStatus === 'success' && p.ip ? (
+                               <div className="mt-4 p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-2xl animate-in fade-in slide-in-from-top-2 duration-300">
+                                  <div className="flex items-center justify-between mb-2">
+                                     <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">Verified Proxy IP</span>
+                                     <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                                  </div>
+                                  <p className="text-sm font-mono font-bold text-slate-200">{p.ip}</p>
+                                  <div className="flex items-center gap-2 mt-2 text-[10px] text-slate-500 font-bold uppercase"><MapPin className="w-3 h-3" /> {p.country}</div>
+                               </div>
+                            ) : p.testStatus === 'failed' ? (
+                               <div className="mt-4 p-4 bg-red-500/5 border border-red-500/10 rounded-2xl text-red-400 flex items-center gap-3">
+                                  <AlertCircle className="w-4 h-4 shrink-0" />
+                                  <span className="text-[10px] font-black uppercase tracking-widest leading-tight">Link Refused: Verify Node Status</span>
+                               </div>
+                            ) : p.testStatus === 'testing' ? (
+                               <div className="mt-4 p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl text-amber-400 flex items-center gap-3">
+                                  <RefreshCcw className="w-4 h-4 animate-spin shrink-0" />
+                                  <span className="text-[10px] font-black uppercase tracking-widest">Routing through Relay...</span>
+                               </div>
+                            ) : (
+                               <div className="mt-4 p-4 bg-slate-900/50 border border-slate-800/50 rounded-2xl text-slate-500 flex items-center gap-3">
+                                  <Globe className="w-4 h-4 shrink-0" />
+                                  <span className="text-[10px] font-black uppercase tracking-widest">Untested Node</span>
+                               </div>
+                            )}
                             <div className="space-y-2 mt-6">
                                <div className="flex items-center gap-3 text-slate-500 font-mono text-xs bg-slate-900/50 p-3 rounded-xl border border-slate-800/50"><Globe className="w-3.5 h-3.5" /> {p.host}:{p.port}</div>
+                               {p.username && <div className="flex items-center gap-3 text-slate-600 font-mono text-[10px] bg-slate-900/30 p-3 rounded-xl border border-slate-800/30"><Key className="w-3.5 h-3.5" /> Authenticated</div>}
                             </div>
+                         </div>
+                         <div className="mt-10 pt-6 border-t border-slate-900 flex items-center justify-between">
+                            <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">Active Links</span>
+                            <span className="text-[10px] font-mono text-amber-500 font-bold px-3 py-1 bg-amber-500/5 rounded-lg border border-amber-500/10">
+                               {sessions.filter(s => s.proxyId === p.id).length + rotatorSessions.filter(s => s.proxyId === p.id).length} SECTORED
+                            </span>
                          </div>
                       </div>
                    ))}
@@ -691,6 +755,15 @@ const App: React.FC = () => {
                     <span className="flex items-center gap-2"> {selectedType} SECTOR</span>
                     <span className="w-1.5 h-1.5 bg-slate-800 rounded-full" />
                     <span>UPTIME: {formatUptime(currentAccount.startTime)}</span>
+                    {currentAccount.proxyId && (
+                      <>
+                        <span className="w-1.5 h-1.5 bg-slate-800 rounded-full" />
+                        <span className="flex items-center gap-2 text-amber-500">
+                          <Globe className="w-3 h-3" /> 
+                          PROXY: {proxies.find(p => p.id === currentAccount.proxyId)?.alias} 
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -712,7 +785,6 @@ const App: React.FC = () => {
             </header>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
-              {/* Identity and Settings Panels - Simplified for brevity */}
               {selectedType === 'STANDARD' && (
                 <section className="bg-slate-900 border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-10">
                    <div className="flex items-center justify-between border-b border-slate-800/50 pb-6">
@@ -731,77 +803,243 @@ const App: React.FC = () => {
                         {isSyncingProfile ? 'Syncing...' : 'Persist Sync'}
                       </button>
                    </div>
-                   <div className="space-y-6">
-                      <div className="space-y-3">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Display Name</label>
-                        <input type="text" placeholder="Loading..." value={getProfileValue('global_name')} 
-                          onChange={e => setEditingProfile(p => ({ ...p, global_name: e.target.value }))}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all" />
+                   
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      <div className="space-y-6">
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Display Name</label>
+                          <input type="text" placeholder={(currentAccount as DiscordSession).profile?.global_name || 'Loading...'}
+                            value={getProfileValue('global_name')} 
+                            onChange={e => setEditingProfile(p => ({ ...p, global_name: e.target.value }))}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all" />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Pronouns</label>
+                          <input type="text" placeholder={(currentAccount as DiscordSession).profile?.pronouns || 'e.g. they/them'}
+                            value={getProfileValue('pronouns')} 
+                            onChange={e => setEditingProfile(p => ({ ...p, pronouns: e.target.value }))}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all" />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">About Me (Bio)</label>
+                          <textarea rows={4} placeholder={(currentAccount as DiscordSession).profile?.bio || 'Tell Discord about yourself...'}
+                            value={getProfileValue('bio')} 
+                            onChange={e => setEditingProfile(p => ({ ...p, bio: e.target.value }))}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all resize-none custom-scrollbar shadow-inner" />
+                        </div>
                       </div>
-                      <div className="space-y-3">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">About Me (Bio)</label>
-                        <textarea rows={4} placeholder="Describe yourself..." value={getProfileValue('bio')} 
-                          onChange={e => setEditingProfile(p => ({ ...p, bio: e.target.value }))}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-blue-500/40 outline-none transition-all resize-none shadow-inner" />
+
+                      <div className="space-y-8">
+                         <div className="space-y-4">
+                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1 block">HypeSquad House</label>
+                           <div className="grid grid-cols-3 gap-3">
+                             {[
+                               { id: 1, name: 'Bravery', color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/20' },
+                               { id: 2, name: 'Brilliance', color: 'text-red-400', bg: 'bg-red-400/10', border: 'border-red-400/20' },
+                               { id: 3, name: 'Balance', color: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/20' }
+                             ].map(house => (
+                               <button key={house.id} onClick={() => handleHypeSquadJoin(house.id)}
+                                 className={`flex flex-col items-center justify-center p-5 rounded-2xl border transition-all hover:scale-[1.05] active:scale-95 ${house.bg} ${house.border}`}>
+                                 <Flag className={`w-6 h-6 ${house.color} mb-2`} />
+                                 <span className={`text-[8px] font-black uppercase ${house.color}`}>{house.name}</span>
+                               </button>
+                             ))}
+                           </div>
+                         </div>
+                         
+                         <div className="p-6 bg-slate-950 border border-slate-800 rounded-[2rem] shadow-inner relative overflow-hidden group">
+                            <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><CreditCard className="w-16 h-16" /></div>
+                            <h4 className="text-[10px] font-black uppercase text-slate-600 mb-6 flex items-center gap-2 tracking-[0.2em]">Profile Metadata</h4>
+                            <div className="space-y-4 font-mono text-[10px]">
+                               <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">INTERNAL ID:</span><span className="text-slate-300">{(currentAccount as DiscordSession).profile?.id || 'Locked'}</span></div>
+                               <div className="flex justify-between border-b border-slate-900 pb-2"><span className="text-slate-600 uppercase">USERNAME:</span><span className="text-slate-300">@{(currentAccount as DiscordSession).profile?.username || 'Locked'}</span></div>
+                               <div className="flex justify-between"><span className="text-slate-600 uppercase">ACCENT:</span><span className="text-blue-500 font-black">#{ (currentAccount as DiscordSession).profile?.accent_color ? (currentAccount as DiscordSession).profile?.accent_color?.toString(16) : 'None' }</span></div>
+                            </div>
+                         </div>
                       </div>
                    </div>
                 </section>
               )}
 
               {selectedType === 'ROTATOR' ? (
-                <section className="bg-[#0a0f1d] border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-10">
-                   <div className="flex items-center gap-4 border-b border-slate-800/50 pb-6">
-                      <div className="p-3 bg-purple-500/10 rounded-2xl shadow-inner"><RotateCw className="w-6 h-6 text-purple-400" /></div>
-                      <h3 className="font-black text-lg tracking-tight uppercase italic">Status Pipeline</h3>
-                   </div>
-                   <div className="space-y-6">
+                <>
+                  <section className="bg-[#0a0f1d] border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-10">
+                    <div className="flex items-center justify-between border-b border-slate-800/50 pb-6">
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 bg-purple-500/10 rounded-2xl shadow-inner"><RotateCw className="w-6 h-6 text-purple-400" /></div>
+                        <h3 className="font-black text-lg tracking-tight uppercase">Status Pipeline</h3>
+                      </div>
+                    </div>
+                    <div className="space-y-6">
                       <div className="flex gap-4">
-                        <input type="text" placeholder="Add status..." value={newStatusItem} onChange={e => setNewStatusItem(e.target.value)}
-                          className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-purple-500/50 outline-none transition-all" />
+                        <input type="text" placeholder="Add status (Emoji support 😍)..." value={newStatusItem} onChange={e => setNewStatusItem(e.target.value)}
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold focus:border-purple-500/50 transition-all font-medium" />
                         <button onClick={() => {
                           if (!newStatusItem.trim()) return;
                           setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: [...s.statusList, newStatusItem.trim()] } : s));
                           setNewStatusItem('');
-                        }} className="p-4 bg-purple-600 hover:bg-purple-500 rounded-2xl transition-all shadow-lg"><Plus className="w-6 h-6 text-white" /></button>
+                        }} className="p-4 bg-purple-600 hover:bg-purple-500 rounded-2xl transition-all shadow-lg shadow-purple-600/20"><Plus className="w-6 h-6 text-white" /></button>
                       </div>
-                      <div className="space-y-3 max-h-64 overflow-y-auto custom-scrollbar">
-                         {(currentAccount as RotatorSession).statusList.map((status, idx) => (
-                           <div key={idx} className={`p-4 rounded-xl border flex items-center justify-between ${ (currentAccount as RotatorSession).currentIndex === idx ? 'bg-purple-600/10 border-purple-500/40' : 'bg-slate-950 border-slate-800' }`}>
-                              <span className="text-xs font-bold truncate">"{status}"</span>
-                              <button onClick={() => setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: s.statusList.filter((_, i) => i !== idx) } : s))} className="text-red-400 hover:text-red-300"><X className="w-4 h-4" /></button>
-                           </div>
-                         ))}
+                      <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                        {(currentAccount as RotatorSession).statusList.map((status, idx) => (
+                          <div key={idx} className={`p-5 rounded-2xl border flex items-center justify-between group transition-all ${
+                            (currentAccount as RotatorSession).currentIndex === idx ? 'bg-purple-600/10 border-purple-500/40 scale-[1.02] shadow-xl' : 'bg-slate-950 border-slate-800/40'
+                          }`}>
+                            <div className="flex items-center gap-4 overflow-hidden">
+                              <span className={`text-[10px] font-mono shrink-0 font-black ${ (currentAccount as RotatorSession).currentIndex === idx ? 'text-purple-400' : 'text-slate-600' }`}>
+                                {String(idx + 1).padStart(2, '0')}
+                              </span>
+                              <p className="text-sm font-bold text-slate-200 truncate">"{status}"</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                               <button onClick={() => {
+                                 setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, statusList: s.statusList.filter((_, i) => i !== idx) } : s));
+                               }} className="opacity-0 group-hover:opacity-100 p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-all"><X className="w-4 h-4" /></button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                   </div>
-                </section>
+                    </div>
+                  </section>
+                  <section className="bg-[#0a0f1d] border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-10">
+                    <div className="flex items-center gap-4 border-b border-slate-800/50 pb-6">
+                      <div className="p-3 bg-amber-500/10 rounded-2xl shadow-inner"><Gauge className="w-6 h-6 text-amber-400" /></div>
+                      <h3 className="font-black text-lg tracking-tight uppercase">Rotation Delay</h3>
+                    </div>
+                    <div className="space-y-8">
+                      <div className="p-8 bg-slate-950 rounded-3xl border border-slate-800/40 text-center relative group overflow-hidden shadow-inner">
+                         <div className="absolute inset-0 bg-gradient-to-b from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                         <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-4">Pulse Interval</p>
+                         <h4 className="text-6xl font-mono font-black text-amber-400 tracking-tighter relative z-10">{(currentAccount as RotatorSession).interval}<span className="text-xl ml-1 text-slate-700 font-sans">SEC</span></h4>
+                      </div>
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-4 gap-3">
+                          {[15, 30, 60, 120].map(val => (
+                            <button key={val} onClick={() => {
+                              setRotatorSessions(prev => prev.map(s => s.id === selectedId ? { ...s, interval: val } : s));
+                              if (currentAccount.status === 'ONLINE') { stopAccount(currentAccount.id, 'ROTATOR'); setTimeout(() => startRotator(currentAccount.id), 1000); }
+                            }} className={`py-4 rounded-2xl text-[11px] font-black border transition-all ${
+                              (currentAccount as RotatorSession).interval === val ? 'bg-amber-500/10 border-amber-500 text-amber-400 shadow-lg shadow-amber-500/5' : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-white hover:border-slate-600'
+                            }`}>{val}s</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </>
               ) : (
-                <section className="bg-slate-900 border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-8">
-                   <div className="flex items-center gap-4 border-b border-slate-800/50 pb-6">
+                <>
+                  <section className="bg-slate-900 border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-8">
+                    <div className="flex items-center gap-4 border-b border-slate-800/50 pb-6">
                       <div className="p-3 bg-blue-500/10 rounded-2xl shadow-inner"><Smile className="w-6 h-6 text-blue-400" /></div>
-                      <h3 className="font-black text-lg tracking-tight uppercase italic">Presence Configuration</h3>
-                   </div>
-                   <div className="grid grid-cols-4 gap-3">
-                      {(['online', 'idle', 'dnd', 'invisible'] as PresenceStatus[]).map(s => (
-                        <button key={s} onClick={() => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, presenceStatus: s } : x))}
-                          className={`py-3 rounded-xl text-[10px] font-black capitalize border transition-all ${
-                            (currentAccount as DiscordSession).presenceStatus === s ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-500'
-                          }`}>{s}</button>
-                      ))}
-                   </div>
-                   <div className="space-y-3">
-                      <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Custom Status</label>
-                      <input type="text" value={(currentAccount as DiscordSession).customStatusText} 
-                         onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: e.target.value } : x))}
-                         placeholder="Status text..." className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm font-bold outline-none" />
-                   </div>
-                </section>
+                      <h3 className="font-black text-lg tracking-tight uppercase italic">Gateway Identity</h3>
+                    </div>
+                    <div className="space-y-8">
+                       <div className="space-y-4">
+                        <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Gateway Presence</label>
+                        <div className="grid grid-cols-4 gap-3">
+                          {(['online', 'idle', 'dnd', 'invisible'] as PresenceStatus[]).map(s => (
+                            <button key={s} onClick={() => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, presenceStatus: s } : x))}
+                              className={`py-4 rounded-2xl text-[11px] font-black capitalize border transition-all ${
+                                (currentAccount as DiscordSession).presenceStatus === s ? 'bg-blue-600 border-blue-500 text-white shadow-xl' : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-white shadow-inner'
+                              }`}>{s}</button>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                           <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Custom Status Override</label>
+                        </div>
+                        <div className="flex gap-3 items-start">
+                           <div className="relative w-24">
+                              <Sticker className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-600" />
+                              <input type="text" placeholder="Emoji" value={(currentAccount as DiscordSession).statusEmoji || ''} 
+                                onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, statusEmoji: e.target.value } : x))}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3 py-4 text-xs focus:border-blue-500 font-bold shadow-inner outline-none" />
+                           </div>
+                           <div className="flex-1 flex gap-2">
+                              <input type="text" value={(currentAccount as DiscordSession).customStatusText} 
+                                onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: e.target.value } : x))}
+                                placeholder="Enter status text..."
+                                className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:border-blue-500 font-bold shadow-inner outline-none" />
+                              <button onClick={async () => {
+                                const suggestions = await generateStatusSuggestions("funny professional gaming");
+                                if (suggestions.length > 0) { setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, customStatusText: suggestions[0].status } : x)); }
+                              }} className="p-4 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-2xl border border-indigo-500/20 transition-all"><Sparkles className="w-5 h-5" /></button>
+                           </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="bg-slate-900 border border-slate-800/60 rounded-[2.5rem] p-10 shadow-xl space-y-8">
+                    <div className="flex items-center justify-between border-b border-slate-800/50 pb-6">
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 bg-purple-500/10 rounded-2xl shadow-inner"><Gamepad2 className="w-6 h-6 text-purple-400" /></div>
+                        <h3 className="font-black text-lg tracking-tight uppercase">Rich Presence (RPC)</h3>
+                      </div>
+                      <button onClick={() => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, rpcEnabled: !x.rpcEnabled } : x))}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${ (currentAccount as DiscordSession).rpcEnabled ? 'bg-purple-600 text-white' : 'bg-slate-800 text-slate-500' }`}>
+                        { (currentAccount as DiscordSession).rpcEnabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" /> }
+                        { (currentAccount as DiscordSession).rpcEnabled ? 'ON' : 'OFF' }
+                      </button>
+                    </div>
+
+                    <div className={`space-y-6 transition-all duration-300 ${ !(currentAccount as DiscordSession).rpcEnabled ? 'opacity-30 pointer-events-none grayscale' : ''}`}>
+                      <div className="space-y-3">
+                        <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Activity Type</label>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { id: 0, name: 'Playing', icon: <Gamepad2 className="w-3.5 h-3.5" /> },
+                            { id: 3, name: 'Watching', icon: <Monitor className="w-3.5 h-3.5" /> },
+                            { id: 2, name: 'Listening', icon: <Music className="w-3.5 h-3.5" /> },
+                            { id: 1, name: 'Streaming', icon: <Tv className="w-3.5 h-3.5" /> },
+                            { id: 5, name: 'Competing', icon: <Trophy className="w-3.5 h-3.5" /> }
+                          ].map(t => (
+                            <button key={t.id} onClick={() => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityType: t.id } : x))}
+                              className={`flex items-center gap-2 px-4 py-3 rounded-xl text-[10px] font-black border transition-all ${
+                                (currentAccount as DiscordSession).activityType === t.id ? 'bg-purple-600 border-purple-500 text-white shadow-md shadow-purple-600/10' : 'bg-slate-950 border-slate-800 text-slate-500'
+                              }`}>{t.icon} {t.name}</button>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-3">
+                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Activity Name</label>
+                          <input type="text" value={(currentAccount as DiscordSession).activityName} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityName: e.target.value } : x))}
+                            placeholder="e.g. Lootify Hub" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold outline-none" />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">App ID</label>
+                          <input type="text" value={(currentAccount as DiscordSession).applicationId || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, applicationId: e.target.value } : x))}
+                            placeholder="Optional Client ID" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold outline-none" />
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="block text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">State & Details</label>
+                        <div className="grid grid-cols-2 gap-4">
+                          <input type="text" value={(currentAccount as DiscordSession).activityDetails || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityDetails: e.target.value } : x))}
+                            placeholder="Details..." className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold outline-none" />
+                          <input type="text" value={(currentAccount as DiscordSession).activityState || ''} onChange={e => setSessions(prev => prev.map(x => x.id === selectedId ? { ...x, activityState: e.target.value } : x))}
+                            placeholder="State..." className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs focus:border-purple-500 font-bold outline-none" />
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </>
               )}
 
               <section className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-10 shadow-xl xl:col-span-2">
-                 <div className="flex items-center justify-between mb-8">
+                 <div className="flex items-center justify-between mb-8 shrink-0">
                     <div className="flex items-center gap-4">
                       <div className="p-3 bg-emerald-500/10 rounded-2xl shadow-inner"><LayoutDashboard className="w-6 h-6 text-emerald-400" /></div>
                       <h3 className="font-black text-lg tracking-tight uppercase italic">Telemetry Console</h3>
+                    </div>
+                    <div className="flex items-center gap-3">
+                       <div className="px-6 py-2 bg-emerald-500/10 text-emerald-400 rounded-full text-[10px] font-black tracking-widest border border-emerald-500/20 uppercase shadow-inner">Gateway Secure</div>
                     </div>
                  </div>
                  <Console logs={currentAccount.logs} />
@@ -816,7 +1054,7 @@ const App: React.FC = () => {
             </div>
             <h2 className="text-6xl font-black tracking-tighter mb-6 uppercase italic">Lootify Onliner</h2>
             <p className="text-slate-500 max-w-lg mx-auto leading-relaxed text-lg font-medium mb-12">
-               Enterprise-grade WebSocket persistence. Deploy clusters and maintain a consistent 24/7 presence with advanced rotation logic and relay intelligence.
+               Enterprise-grade WebSocket persistence for Discord accounts. Deploy clusters and maintain a consistent 24/7 presence with advanced rotation logic and identity synchronization.
             </p>
             <div className="flex gap-4">
                <button onClick={() => { setAddType('STANDARD'); setIsAdding(true); }} className="px-10 py-6 bg-blue-600 hover:bg-blue-500 text-white rounded-[1.75rem] font-black text-sm transition-all shadow-2xl shadow-blue-600/20 active:scale-95 uppercase tracking-widest">Deploy Standard</button>
