@@ -18,6 +18,9 @@ export class DiscordWorker {
   private onUpdate: (status: ConnectionStatus, log?: LogEntry) => void;
   private isConnected: boolean = false;
   
+  // Reads the relay URL from Vercel environment variables
+  private RELAY_URL = (window as any).process?.env?.VITE_RELAY_URL || "";
+
   private config: WorkerConfig = {
     status: 'online',
     customStatusText: '',
@@ -48,32 +51,58 @@ export class DiscordWorker {
   public connect() {
     this.isConnected = false;
     const proxy = this.config.proxy;
-    const proxyMsg = proxy ? ` via Proxy [${proxy.alias}]` : '';
     
-    this.onUpdate('CONNECTING', { 
-      timestamp: new Date(), 
-      message: `Initiating Gateway v10 Tunnel${proxyMsg}...`, 
-      type: 'INFO' 
-    });
+    const discordGateway = 'wss://gateway.discord.gg/?v=10&encoding=json';
     
-    if (proxy) {
-      this.log(`Proxy Node: ${proxy.host}:${proxy.port} (${proxy.type})`, 'DEBUG');
-      if (proxy.ip) {
-        this.log(`[Network] Outbound IP: ${proxy.ip} | Node Location: ${proxy.country || 'Global'}`, 'SUCCESS');
-      }
+    // If a proxy is used, we connect to our RENDER RELAY. 
+    // If no proxy, we connect DIRECTLY to Discord.
+    const connectionUrl = (proxy && this.RELAY_URL) ? this.RELAY_URL : discordGateway;
+
+    if (proxy && !this.RELAY_URL) {
+      this.log('Proxy selected but VITE_RELAY_URL is missing in Vercel. Using direct IP.', 'ERROR');
     }
 
+    this.onUpdate('CONNECTING', { 
+      timestamp: new Date(), 
+      message: proxy ? `Initiating Relay via Node [${proxy.alias}]...` : `Establishing Direct Discord Link...`, 
+      type: 'INFO' 
+    });
+
     try {
-      this.ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
+      this.ws = new WebSocket(connectionUrl);
 
       this.ws.onopen = () => {
-        this.log('Tunnel synchronized.', 'SUCCESS');
+        if (proxy && this.RELAY_URL) {
+          this.log('Relay Handshake: Sending proxy credentials to Render Node...', 'DEBUG');
+          this.ws?.send(JSON.stringify({
+            type: 'INIT_PROXY',
+            target: discordGateway,
+            proxy: {
+              host: proxy.host,
+              port: proxy.port,
+              username: proxy.username,
+              password: proxy.password,
+              type: proxy.type
+            }
+          }));
+        }
       };
 
       this.ws.onmessage = (event) => {
         const payload = JSON.parse(event.data);
-        const { op, d, t, s } = payload;
 
+        // Control messages from our Render Backend
+        if (payload.type === 'RELAY_READY') {
+          this.log('Relay success. Proxy tunnel established to Discord.', 'SUCCESS');
+          return;
+        }
+        if (payload.type === 'RELAY_ERROR') {
+          this.log(`Relay Failed: ${payload.error}`, 'ERROR');
+          this.onUpdate('ERROR');
+          return;
+        }
+
+        const { op, d, t, s } = payload;
         if (s) this.sequence = s;
 
         switch (op) {
@@ -82,46 +111,31 @@ export class DiscordWorker {
             this.startHeartbeat();
             this.identify();
             break;
-          
-          case 11: // Heartbeat ACK
-            break;
-
           case 0: // Dispatch
             if (t === 'READY') {
               this.isConnected = true;
-              this.log(`Session Authorized: ${d.user.username}`, 'SUCCESS');
+              this.log(`Authorized as ${d.user.username}`, 'SUCCESS');
               this.onUpdate('ONLINE');
             }
             break;
-
           case 1: // Heartbeat Request
             this.sendHeartbeat();
-            break;
-
-          case 9: // Invalid Session
-            this.log('Session discarded by Gateway.', 'ERROR');
-            this.reconnect();
             break;
         }
       };
 
       this.ws.onerror = () => {
-        this.log(`Network stream failure.`, 'ERROR');
+        this.log(`Connection error. Check your Proxy or Relay URL.`, 'ERROR');
         this.onUpdate('ERROR');
       };
 
       this.ws.onclose = (event) => {
         this.isConnected = false;
         this.stopHeartbeat();
-
-        if (event.code === 4004) {
-          this.log('Auth Failure: Check Token.', 'ERROR');
-          this.onUpdate('ERROR');
-        } else if (event.code === 1000) {
-          this.onUpdate('OFFLINE');
-        } else {
-          this.log(`Stream dropped (Code ${event.code}). Retrying...`, 'ERROR');
+        if (event.code !== 1000) {
           this.reconnect();
+        } else {
+          this.onUpdate('OFFLINE');
         }
       };
 
@@ -133,36 +147,26 @@ export class DiscordWorker {
 
   private identify() {
     const activities: any[] = [];
-
     if (this.config.customStatusText) {
       activities.push({
         type: 4,
         name: "Custom Status",
-        state: this.config.customStatusText,
-        emoji: null
+        state: this.config.customStatusText
       });
     }
-
     if (this.config.activityName) {
       activities.push({
         type: this.config.activityType,
         name: this.config.activityName,
-        details: "Managing via Lootify",
-        application_id: null
+        details: "Lootify Hub"
       });
     }
 
-    this.log(`Setting account presence to ${this.config.status}...`, 'INFO');
-
-    const payload = {
+    this.ws?.send(JSON.stringify({
       op: 2,
       d: {
         token: this.token,
-        properties: {
-          $os: "Windows",
-          $browser: "Chrome",
-          $device: ""
-        },
+        properties: { $os: "Windows", $browser: "Chrome", $device: "" },
         presence: {
           status: this.config.status,
           afk: false,
@@ -170,15 +174,12 @@ export class DiscordWorker {
           since: 0
         }
       }
-    };
-    this.ws?.send(JSON.stringify(payload));
+    }));
   }
 
   private startHeartbeat() {
     if (this.heartbeatInterval) {
-      this.intervalRef = setInterval(() => {
-        this.sendHeartbeat();
-      }, this.heartbeatInterval);
+      this.intervalRef = setInterval(() => this.sendHeartbeat(), this.heartbeatInterval);
     }
   }
 
@@ -189,15 +190,11 @@ export class DiscordWorker {
   }
 
   private stopHeartbeat() {
-    if (this.intervalRef) {
-      clearInterval(this.intervalRef);
-      this.intervalRef = null;
-    }
+    if (this.intervalRef) clearInterval(this.intervalRef);
   }
 
   private reconnect() {
     this.stopHeartbeat();
-    this.ws?.close();
     setTimeout(() => this.connect(), 5000);
   }
 

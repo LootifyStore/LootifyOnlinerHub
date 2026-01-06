@@ -19,8 +19,8 @@ export class DiscordRotatorWorker {
   private isConnected: boolean = false;
   private config: RotatorConfig;
   private currentIndex: number = 0;
-  private lastUpdate: number = 0;
-  private lastHeartbeatAck: boolean = true;
+  
+  private RELAY_URL = (window as any).process?.env?.VITE_RELAY_URL || "";
 
   constructor(
     token: string, 
@@ -44,31 +44,48 @@ export class DiscordRotatorWorker {
     this.stopHeartbeat();
     this.stopRotation();
     this.isConnected = false;
-    this.lastHeartbeatAck = true;
     this.currentIndex = 0;
     
     const proxy = this.config.proxy;
-    const proxyMsg = proxy ? ` via Proxy [${proxy.alias}]` : '';
-    this.log(`[System] Initializing Lootify Engine${proxyMsg}...`, 'INFO');
-    
-    if (proxy) {
-      this.log(`[Proxy Info] Node: ${proxy.host}:${proxy.port}`, 'DEBUG');
-      if (proxy.ip) {
-        this.log(`[Network] Routed IP: ${proxy.ip} | Country: ${proxy.country || 'N/A'}`, 'SUCCESS');
-      }
-    }
+    const discordGateway = 'wss://gateway.discord.gg/?v=10&encoding=json';
+    const connectionUrl = (proxy && this.RELAY_URL) ? this.RELAY_URL : discordGateway;
+
+    this.log(`[Engine] Initializing... ${proxy ? 'using Relay Node' : 'direct'}`, 'INFO');
 
     try {
-      this.ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
+      this.ws = new WebSocket(connectionUrl);
 
       this.ws.onopen = () => {
-        this.log('WebSocket link established.', 'SUCCESS');
+        if (proxy && this.RELAY_URL) {
+          this.ws?.send(JSON.stringify({
+            type: 'INIT_PROXY',
+            target: discordGateway,
+            proxy: {
+              host: proxy.host,
+              port: proxy.port,
+              username: proxy.username,
+              password: proxy.password,
+              type: proxy.type
+            }
+          }));
+        }
       };
 
       this.ws.onmessage = (event) => {
         const payload = JSON.parse(event.data);
+
+        if (payload.type === 'RELAY_READY') {
+          this.log('Relay Link established.', 'SUCCESS');
+          return;
+        }
+        if (payload.type === 'RELAY_ERROR') {
+          this.log(`Relay Node Error: ${payload.error}`, 'ERROR');
+          this.onUpdate('ERROR');
+          return;
+        }
+
         const { op, d, t, s } = payload;
-        if (s !== undefined && s !== null) this.sequence = s;
+        if (s !== undefined) this.sequence = s;
 
         switch (op) {
           case 10: // Hello
@@ -76,36 +93,15 @@ export class DiscordRotatorWorker {
             this.startHeartbeat();
             this.identify();
             break;
-          
-          case 11: // Heartbeat ACK
-            this.lastHeartbeatAck = true;
-            break;
-
-          case 7: // Reconnect
-            this.log('Gateway session refresh required.', 'DEBUG');
-            this.reconnect();
-            break;
-
-          case 9: // Invalid Session
-            this.log('Session integrity failed.', 'ERROR');
-            this.reconnect();
-            break;
-
           case 0: // Dispatch
             if (t === 'READY') {
               this.isConnected = true;
               this.log(`Authorized: ${d.user.username}`, 'SUCCESS');
               this.onUpdate('ONLINE');
-              
-              // Immediate sync for status 1
-              this.log('[Engine] Step 1: Setting initial account presence...', 'INFO');
-              this.updatePresence(this.config.statusList[0] || 'Lootify Onliner Active');
-              
-              this.log(`[Engine] Delaying rotation for ${this.config.intervalSeconds}s...`, 'DEBUG');
+              this.updatePresence(this.config.statusList[0] || 'Active');
               setTimeout(() => this.startRotation(), 2000);
             }
             break;
-
           case 1: // Heartbeat Request
             this.sendHeartbeat();
             break;
@@ -116,54 +112,26 @@ export class DiscordRotatorWorker {
         this.isConnected = false;
         this.stopRotation();
         this.stopHeartbeat();
-        
-        if (e.code === 4004) {
-          this.log('Access Denied: Token is invalid.', 'ERROR');
-          this.onUpdate('ERROR');
-        } else if (e.code === 4008) {
-          this.log('Rate Limit: Excessive updates. Pausing engine...', 'ERROR');
-          this.onUpdate('ERROR');
-          setTimeout(() => this.reconnect(), 15000);
-        } else if (e.code !== 1000) {
-          this.log(`Tunnel Dropped (${e.code}). Attempting recovery...`, 'ERROR');
-          this.reconnect();
-        } else {
-          this.onUpdate('OFFLINE');
-        }
+        if (e.code !== 1000) this.reconnect();
+        else this.onUpdate('OFFLINE');
       };
 
-      this.ws.onerror = () => this.log('Stream encountered a network error.', 'ERROR');
-
     } catch (e) {
-      this.log(`Fatal start error: ${e}`, 'ERROR');
+      this.log(`Start error: ${e}`, 'ERROR');
       this.onUpdate('ERROR');
     }
   }
 
   private identify() {
-    this.log('Broadcasting identity to Gateway...', 'INFO');
-    
-    // Using First Status in Identify payload to force visibility
-    const firstStatus = this.config.statusList[0] || 'Lootify Onliner';
-
     this.ws?.send(JSON.stringify({
       op: 2,
       d: {
         token: this.token,
-        properties: {
-          $os: "Windows",
-          $browser: "Chrome",
-          $device: ""
-        },
+        properties: { $os: "Windows", $browser: "Chrome", $device: "" },
         presence: {
           status: this.config.status,
           since: 0,
-          activities: [{
-            type: 4,
-            name: "Custom Status",
-            state: firstStatus,
-            emoji: null
-          }],
+          activities: [{ type: 4, name: "Custom Status", state: this.config.statusList[0] || 'Active' }],
           afk: false
         }
       }
@@ -173,69 +141,35 @@ export class DiscordRotatorWorker {
   private startRotation() {
     this.stopRotation();
     if (!this.isConnected || this.config.statusList.length < 2) return;
-
     const intervalMs = Math.max(this.config.intervalSeconds, 15) * 1000;
-    this.log(`[Engine] Rotation loop started (Freq: ${intervalMs/1000}s).`, 'SUCCESS');
-
-    this.rotationRef = setInterval(() => {
-      this.advanceRotation();
-    }, intervalMs);
+    this.rotationRef = setInterval(() => this.advanceRotation(), intervalMs);
   }
 
   private advanceRotation() {
-    if (!this.isConnected || this.ws?.readyState !== WebSocket.OPEN) return;
-    
-    const now = Date.now();
-    // Safety guard for Discord Gateway rate limits
-    if (now - this.lastUpdate < 12000) return;
-
+    if (!this.isConnected) return;
     const nextIndex = (this.currentIndex + 1) % this.config.statusList.length;
-    const nextText = this.config.statusList[nextIndex];
-
-    this.log(`[Engine] Transition: Status #${this.currentIndex + 1} -> Status #${nextIndex + 1}`, 'INFO');
-    this.log(`[Engine] Status set for #${nextIndex + 1}: "${nextText}"`, 'DEBUG');
-    
-    this.updatePresence(nextText);
+    this.updatePresence(this.config.statusList[nextIndex]);
     this.currentIndex = nextIndex;
     this.onUpdate('ONLINE', undefined, this.currentIndex);
-    this.lastUpdate = now;
-    
-    this.log(`[Engine] Delay of ${this.config.intervalSeconds}s until next rotation...`, 'DEBUG');
   }
 
   private updatePresence(text: string) {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      const payload = {
+      this.ws.send(JSON.stringify({
         op: 3,
         d: {
           since: 0,
-          activities: [{ 
-            type: 4, 
-            name: "Custom Status", 
-            state: text, 
-            emoji: null
-          }],
+          activities: [{ type: 4, name: "Custom Status", state: text }],
           status: this.config.status,
           afk: false
         }
-      };
-      
-      this.ws.send(JSON.stringify(payload));
+      }));
     }
   }
 
   private startHeartbeat() {
     if (this.heartbeatInterval) {
-      this.sendHeartbeat();
-      this.hbRef = setInterval(() => {
-        if (!this.lastHeartbeatAck) {
-          this.log('Heartbeat missed. Re-establishing link...', 'ERROR');
-          this.reconnect();
-          return;
-        }
-        this.lastHeartbeatAck = false;
-        this.sendHeartbeat();
-      }, this.heartbeatInterval);
+      this.hbRef = setInterval(() => this.sendHeartbeat(), this.heartbeatInterval);
     }
   }
 
@@ -251,17 +185,13 @@ export class DiscordRotatorWorker {
   private reconnect() {
     this.stopHeartbeat();
     this.stopRotation();
-    this.ws?.close();
     setTimeout(() => this.connect(), 5000);
   }
 
   public disconnect() {
     this.stopRotation();
     this.stopHeartbeat();
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close(1000);
-    }
+    if (this.ws) { this.ws.onclose = null; this.ws.close(1000); }
     this.onUpdate('OFFLINE');
   }
 }
