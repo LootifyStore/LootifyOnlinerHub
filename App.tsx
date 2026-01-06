@@ -57,8 +57,7 @@ import {
   Cloud,
   HardDrive,
   Cpu,
-  ExternalLink,
-  Coffee
+  ExternalLink
 } from 'lucide-react';
 
 // Helper to revive dates from localStorage
@@ -108,7 +107,7 @@ const App: React.FC = () => {
   const [editingProfile, setEditingProfile] = useState<Partial<DiscordUserProfile>>({});
   const [isSyncingProfile, setIsSyncingProfile] = useState(false);
   const [showRelayHelp, setShowRelayHelp] = useState(false);
-  const [relayHealth, setRelayHealth] = useState<'idle' | 'online' | 'sleeping' | 'offline'>('idle');
+  const [relayHealth, setRelayHealth] = useState<'idle' | 'online' | 'offline'>('idle');
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
@@ -133,7 +132,7 @@ const App: React.FC = () => {
            "";
   };
 
-  // Render.com Persistence Engine: Prevent Sleep while tab is open
+  // Relay Health Check
   useEffect(() => {
     const url = getRelayUrl();
     if (!url) {
@@ -141,23 +140,18 @@ const App: React.FC = () => {
       return;
     }
 
-    const check = async () => {
+    const check = () => {
       try {
-        // We try to fetch the HTTP version of the relay URL (Render uses same URL for WS/HTTP)
-        const httpUrl = url.replace('ws://', 'http://').replace('wss://', 'https://');
-        const start = Date.now();
-        const res = await fetch(httpUrl, { mode: 'no-cors' });
-        // Since it's no-cors, we won't see body, but if it doesn't throw, the server is awake
-        setRelayHealth('online');
+        const ws = new WebSocket(url);
+        ws.onopen = () => { setRelayHealth('online'); ws.close(); };
+        ws.onerror = () => { setRelayHealth('offline'); };
       } catch (e) {
-        // If it's slow or fails, it might be sleeping or down
-        setRelayHealth('sleeping');
+        setRelayHealth('offline');
       }
     };
 
     check();
-    // Ping every 5 minutes to keep Render Awake
-    const interval = setInterval(check, 300000);
+    const interval = setInterval(check, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -400,21 +394,17 @@ const App: React.FC = () => {
              <div className={`p-5 rounded-2xl border transition-all ${getRelayUrl() ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
                 <div className="flex items-center justify-between mb-4">
                    <div className="flex items-center gap-3">
-                      {relayHealth === 'sleeping' ? <Coffee className="w-4 h-4 text-amber-400 animate-pulse" /> : <Cloud className={`w-4 h-4 ${getRelayUrl() ? 'text-indigo-400' : 'text-red-400'}`} />}
-                      <span className="text-[10px] font-black uppercase tracking-widest">
-                         {relayHealth === 'sleeping' ? 'Render Sleeping' : getRelayUrl() ? 'Persistent Node' : 'Browser Only'}
-                      </span>
+                      <Cloud className={`w-4 h-4 ${getRelayUrl() ? 'text-indigo-400' : 'text-red-400'}`} />
+                      <span className="text-[10px] font-black uppercase tracking-widest">{getRelayUrl() ? 'Persistent Node' : 'Browser Only'}</span>
                    </div>
-                   <div className={`w-2 h-2 rounded-full ${relayHealth === 'online' ? 'bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]' : relayHealth === 'sleeping' ? 'bg-amber-500' : 'bg-red-500'}`} />
+                   <div className={`w-2 h-2 rounded-full ${relayHealth === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
                 </div>
-                {relayHealth === 'sleeping' ? (
-                   <p className="text-[8px] text-amber-500/70 font-bold uppercase leading-relaxed mb-3">Relay is cold. Engines will delay until Render wakes up (up to 1 min).</p>
-                ) : !getRelayUrl() && (
+                {!getRelayUrl() && (
                   <p className="text-[8px] text-slate-500 font-bold uppercase leading-relaxed mb-3">24/7 Mode Disengaged. Engines will stop when tab is closed.</p>
                 )}
                 <div className="flex items-center justify-between text-[8px] font-mono text-slate-600">
-                   <span className="flex items-center gap-1"><HardDrive className="w-2.5 h-2.5" /> RNDR-RELAY</span>
-                   <span>{relayHealth === 'online' ? 'PING: 34ms' : 'PING: --'}</span>
+                   <span className="flex items-center gap-1"><HardDrive className="w-2.5 h-2.5" /> VER-SRV-01</span>
+                   <span>{relayHealth === 'online' ? 'LTC: 42ms' : 'LTC: INF'}</span>
                 </div>
              </div>
           </div>
@@ -509,31 +499,22 @@ const App: React.FC = () => {
                  <div className="relative z-10">
                     <div className="flex items-center gap-4 mb-8">
                        <div className="p-4 bg-indigo-500/10 rounded-2xl border border-indigo-500/20"><Zap className="w-8 h-8 text-indigo-400" /></div>
-                       <h2 className="text-3xl font-black uppercase italic tracking-tighter">Render.com Uptime Fix</h2>
+                       <h2 className="text-3xl font-black uppercase italic tracking-tighter">True 24/7 Guide</h2>
                     </div>
                     <div className="space-y-6 text-slate-400 leading-relaxed font-medium">
-                       <p>If your accounts go offline after you close the tab, it's because <span className="text-white font-bold italic">Render.com Free Tier</span> puts your relay to sleep after 15 minutes.</p>
+                       <p>Because <span className="text-white font-bold italic">Vercel</span> is a Serverless platform, your accounts normally disconnect when you close this browser tab. To fix this, you need a <span className="text-indigo-400">Persistent Relay Backend</span>.</p>
                        <div className="p-6 bg-slate-900/50 rounded-3xl border border-slate-800 space-y-4">
-                          <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500">How to fix 24/7 on Render:</h4>
+                          <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500">How to deploy Relay:</h4>
                           <ol className="list-decimal list-inside space-y-3 text-xs">
-                             <li>Sign up for a free <span className="text-white">UptimeRobot</span> or <span className="text-white">Cron-job.org</span> account.</li>
-                             <li>Add a "HTTP Monitor" targeting your Render URL.</li>
-                             <li>Set it to ping your relay every <span className="text-indigo-400">10 minutes</span>.</li>
-                             <li>This prevents Render from sleeping, keeping your Discord accounts online forever.</li>
+                             <li>Clone the <span className="text-white">Lootify Relay</span> repository.</li>
+                             <li>Host it on <span className="text-white">Replit (Hacker Plan)</span> or a <span className="text-white">VPS</span>.</li>
+                             <li>Set the <span className="text-indigo-400">VITE_RELAY_URL</span> environment variable in Vercel.</li>
+                             <li>Deploy. Lootify will now hand off workers to your server.</li>
                           </ol>
                        </div>
                        <div className="flex gap-4 pt-6">
-                          <button onClick={() => setShowRelayHelp(false)} className="flex-1 py-5 bg-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest border border-slate-800 hover:bg-slate-800 transition-all">Got it</button>
-                          <button 
-                            onClick={() => {
-                              const url = getRelayUrl().replace('ws://', 'http://').replace('wss://', 'https://');
-                              navigator.clipboard.writeText(url);
-                              alert("Relay HTTP URL copied! Use this in UptimeRobot.");
-                            }}
-                            className="flex-1 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest text-center flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/20"
-                          >
-                            <ClipboardList className="w-4 h-4" /> Copy Ping URL
-                          </button>
+                          <button onClick={() => setShowRelayHelp(false)} className="flex-1 py-5 bg-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest border border-slate-800 hover:bg-slate-800 transition-all">Close System Brief</button>
+                          <a href="https://github.com/4realwilly/Discord-247-Onliner.git" target="_blank" className="flex-1 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest text-center flex items-center justify-center gap-2 shadow-xl shadow-indigo-600/20"><ExternalLink className="w-4 h-4" /> View Backend Repo</a>
                        </div>
                     </div>
                  </div>
