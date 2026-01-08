@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { DiscordSession, RotatorSession, ConnectionStatus, LogEntry, GeminiStatusSuggestion, PresenceStatus, AccountType, Proxy, ProxyType, DiscordUserProfile } from './types.ts';
 import { DiscordWorker } from './services/discordService.ts';
@@ -58,7 +59,9 @@ import {
   ExternalLink,
   Cloud,
   HelpCircle,
-  Link2
+  Link2,
+  ShieldAlert,
+  Eye
 } from 'lucide-react';
 
 const reviveDates = (session: any) => ({
@@ -108,8 +111,9 @@ const App: React.FC = () => {
   const [isSyncingProfile, setIsSyncingProfile] = useState(false);
   
   const [showRDPGuide, setShowRDPGuide] = useState(false);
-  const [relayHealth, setRelayHealth] = useState<'idle' | 'online' | 'offline'>('idle');
+  const [relayHealth, setRelayHealth] = useState<'idle' | 'online' | 'offline' | 'checking'>('idle');
   const [mixedContentWarning, setMixedContentWarning] = useState(false);
+  const [diagOutput, setDiagOutput] = useState<string[]>([]);
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
@@ -133,35 +137,56 @@ const App: React.FC = () => {
            "";
   };
 
+  const getTunnelHttpUrl = () => {
+    const url = getRelayUrl();
+    if (!url) return null;
+    return url.replace('wss://', 'https://').replace('ws://', 'http://');
+  };
+
   const isRDPDeployment = () => {
     const url = getRelayUrl();
     return url && !url.includes('render.com') && !url.includes('vercel.app');
   };
 
-  useEffect(() => {
+  const runDiagnostics = async () => {
     const url = getRelayUrl();
-    if (!url) { setRelayHealth('offline'); return; }
+    setRelayHealth('checking');
+    setDiagOutput(["Starting diagnostics...", `Target URL: ${url}`]);
+    
+    if (!url) {
+      setDiagOutput(prev => [...prev, "❌ ERROR: VITE_RELAY_URL is empty. Set it in Vercel settings."]);
+      setRelayHealth('offline');
+      return;
+    }
 
     if (window.location.protocol === 'https:' && url.startsWith('ws://')) {
+      setDiagOutput(prev => [...prev, "❌ SECURITY BLOCK: Browser blocks 'ws://' from 'https://'. Change your variable to 'wss://'."]);
       setMixedContentWarning(true);
       setRelayHealth('offline');
-    } else {
-      setMixedContentWarning(false);
-      const check = async () => {
-        try {
-          const httpUrl = url.replace('ws://', 'http://').replace('wss://', 'https://');
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 3000);
-          await fetch(httpUrl, { mode: 'no-cors', signal: controller.signal });
-          setRelayHealth('online');
-          clearTimeout(timeoutId);
-        } catch (e) {
-          setRelayHealth('offline');
-        }
-      };
-      check();
+      return;
     }
-    const interval = setInterval(() => {}, 30000);
+
+    try {
+      const testUrl = url.replace('ws://', 'http://').replace('wss://', 'https://');
+      setDiagOutput(prev => [...prev, `Testing Tunnel Handshake: ${testUrl}`]);
+      
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      
+      const res = await fetch(testUrl, { mode: 'no-cors', signal: controller.signal });
+      setDiagOutput(prev => [...prev, "✅ Relay Node reachable."]);
+      setRelayHealth('online');
+      setMixedContentWarning(false);
+      clearTimeout(timeout);
+    } catch (e: any) {
+      setDiagOutput(prev => [...prev, `❌ OFFLINE: ${e.message}`, "TIP: If using Ngrok/Localtunnel, click 'Clear Tunnel Warning' below."]);
+      setRelayHealth('offline');
+    }
+  };
+
+  useEffect(() => {
+    runDiagnostics();
+    const interval = setInterval(runDiagnostics, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -170,30 +195,6 @@ const App: React.FC = () => {
     hasAutoResumed.current = true;
     sessions.forEach(s => (s.status === 'ONLINE' || s.status === 'CONNECTING') && startStandard(s.id));
     rotatorSessions.forEach(s => (s.status === 'ONLINE' || s.status === 'CONNECTING') && startRotator(s.id));
-  }, []);
-
-  const addStandardLog = useCallback((id: string, log: LogEntry) => {
-    setSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
-  }, []);
-
-  const updateStandardStatus = useCallback((id: string, status: ConnectionStatus, profile?: DiscordUserProfile) => {
-    setSessions(prev => prev.map(s => s.id === id ? { 
-      ...s, status, profile: profile || s.profile,
-      startTime: status === 'ONLINE' ? (s.startTime || new Date()) : (status === 'OFFLINE' ? null : s.startTime),
-      lastHeartbeat: status === 'ONLINE' ? new Date() : s.lastHeartbeat
-    } : s));
-  }, []);
-
-  const addRotatorLog = useCallback((id: string, log: LogEntry) => {
-    setRotatorSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
-  }, []);
-
-  const updateRotatorStatus = useCallback((id: string, status: ConnectionStatus, index?: number) => {
-    setRotatorSessions(prev => prev.map(s => s.id === id ? { 
-      ...s, status, currentIndex: index !== undefined ? index : s.currentIndex,
-      startTime: status === 'ONLINE' ? (s.startTime || new Date()) : (status === 'OFFLINE' ? null : s.startTime),
-      lastHeartbeat: status === 'ONLINE' ? new Date() : s.lastHeartbeat
-    } : s));
   }, []);
 
   const startStandard = (id: string) => {
@@ -227,6 +228,17 @@ const App: React.FC = () => {
     worker.connect();
   };
 
+  const updateStandardStatus = useCallback((id: string, status: ConnectionStatus, profile?: DiscordUserProfile) => {
+    setSessions(prev => prev.map(s => s.id === id ? { ...s, status, profile: profile || s.profile, startTime: status === 'ONLINE' ? (s.startTime || new Date()) : (status === 'OFFLINE' ? null : s.startTime), lastHeartbeat: status === 'ONLINE' ? new Date() : s.lastHeartbeat } : s));
+  }, []);
+
+  const updateRotatorStatus = useCallback((id: string, status: ConnectionStatus, index?: number) => {
+    setRotatorSessions(prev => prev.map(s => s.id === id ? { ...s, status, currentIndex: index !== undefined ? index : s.currentIndex, startTime: status === 'ONLINE' ? (s.startTime || new Date()) : (status === 'OFFLINE' ? null : s.startTime), lastHeartbeat: status === 'ONLINE' ? new Date() : s.lastHeartbeat } : s));
+  }, []);
+
+  const addStandardLog = useCallback((id: string, log: LogEntry) => { setSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s)); }, []);
+  const addRotatorLog = useCallback((id: string, log: LogEntry) => { setRotatorSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s)); }, []);
+
   const stopAccount = (id: string, type: AccountType) => {
     if (type === 'STANDARD') { standardWorkers.current.get(id)?.disconnect(); standardWorkers.current.delete(id); updateStandardStatus(id, 'OFFLINE'); }
     else { rotatorWorkers.current.get(id)?.disconnect(); rotatorWorkers.current.delete(id); updateRotatorStatus(id, 'OFFLINE'); }
@@ -236,52 +248,61 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!newToken.trim()) return;
     const id = crypto.randomUUID();
-    if (addType === 'STANDARD') {
-      setSessions(p => [...p, {
-        id, token: newToken.trim(), label: newLabel.trim() || `Account ${sessions.length + 1}`,
-        status: 'OFFLINE', lastHeartbeat: null, startTime: null, logs: [], accountType: 'STANDARD',
-        presenceStatus: 'online', customStatusText: 'Lootify Onliner 😍', statusEmoji: '🎁', rpcEnabled: true,
-        activityName: 'Lootify Hub', activityType: 0, activityDetails: 'Persistence System', activityState: 'Onliner Active',
-        proxyId: selectedProxyId || undefined
-      }]);
-    } else {
-      setRotatorSessions(p => [...p, {
-        id, token: newToken.trim(), label: newLabel.trim() || `Rotator ${rotatorSessions.length + 1}`,
-        status: 'OFFLINE', lastHeartbeat: null, startTime: null, logs: [], accountType: 'ROTATOR',
-        presenceStatus: 'online', statusList: ['Lootify Active 😍', '24/7 Monitoring 🔥', 'Status Rotating 🚀'], interval: 60, currentIndex: 0,
-        proxyId: selectedProxyId || undefined
-      }]);
-    }
+    if (addType === 'STANDARD') { setSessions(p => [...p, { id, token: newToken.trim(), label: newLabel.trim() || `Account ${sessions.length + 1}`, status: 'OFFLINE', lastHeartbeat: null, startTime: null, logs: [], accountType: 'STANDARD', presenceStatus: 'online', customStatusText: 'Lootify Onliner 😍', statusEmoji: '🎁', rpcEnabled: true, activityName: 'Lootify Hub', activityType: 0, activityDetails: 'Persistence System', activityState: 'Onliner Active', proxyId: selectedProxyId || undefined }]); }
+    else { setRotatorSessions(p => [...p, { id, token: newToken.trim(), label: newLabel.trim() || `Rotator ${rotatorSessions.length + 1}`, status: 'OFFLINE', lastHeartbeat: null, startTime: null, logs: [], accountType: 'ROTATOR', presenceStatus: 'online', statusList: ['Lootify Active 😍', '24/7 Monitoring 🔥', 'Status Rotating 🚀'], interval: 60, currentIndex: 0, proxyId: selectedProxyId || undefined }]); }
     setNewToken(''); setNewLabel(''); setIsAdding(false); setSelectedId(id); setSelectedType(addType);
   };
 
-  const handleRename = () => {
-    if (!editingId || !renameValue.trim()) { setEditingId(null); return; }
-    setSessions(prev => prev.map(s => s.id === editingId ? { ...s, label: renameValue } : s));
-    setRotatorSessions(prev => prev.map(s => s.id === editingId ? { ...s, label: renameValue } : s));
-    setProxies(prev => prev.map(p => p.id === editingId ? { ...p, alias: renameValue } : p));
-    setEditingId(null);
-  };
-
-  const handleAddProxy = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!proxyHost || !proxyPort) return;
-    setProxies(p => [...p, { id: crypto.randomUUID(), alias: proxyAlias || `Proxy ${proxies.length + 1}`, host: proxyHost, port: parseInt(proxyPort), username: proxyUser, password: proxyPass, type: proxyType, testStatus: 'idle' }]);
-    setProxyAlias(''); setProxyHost(''); setProxyPort('8080'); setProxyUser(''); setProxyPass(''); setIsAddingProxy(false);
-  };
-
+  // Fix: Added handleBulkProxyImport for processing batch proxy additions
   const handleBulkProxyImport = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bulkInput.trim()) return;
-    const lines = bulkInput.trim().split('\n');
-    const newProxies: Proxy[] = [];
-    lines.forEach((line) => {
-      if (proxies.length + newProxies.length >= 20) return;
-      const parts = line.trim().split(':');
-      if (parts.length >= 2) newProxies.push({ id: crypto.randomUUID(), alias: `${parts[0]} [${parts[1]}]`, host: parts[0], port: parseInt(parts[1]), username: parts[2] || undefined, password: parts[3] || undefined, type: proxyType, testStatus: 'idle' });
+    const lines = bulkInput.split('\n').filter(l => l.trim());
+    const newProxies: Proxy[] = lines.map(line => {
+      const parts = line.split(':');
+      const host = parts[0] || '';
+      const port = parseInt(parts[1]) || 8080;
+      const username = parts[2] || undefined;
+      const password = parts[3] || undefined;
+      return {
+        id: crypto.randomUUID(),
+        alias: host,
+        host,
+        port,
+        username,
+        password,
+        type: 'HTTP',
+        testStatus: 'idle'
+      };
     });
     setProxies(prev => [...prev, ...newProxies]);
-    setBulkInput(''); setIsBulkImport(false);
+    setBulkInput('');
+    setIsBulkImport(false);
+  };
+
+  // Fix: Added handleAddProxy for adding a single proxy entry
+  const handleAddProxy = (e: React.FormEvent) => {
+    e.preventDefault();
+    const newProxy: Proxy = {
+      id: crypto.randomUUID(),
+      alias: proxyAlias || 'New Proxy',
+      host: proxyHost,
+      port: parseInt(proxyPort) || 8080,
+      username: proxyUser || undefined,
+      password: proxyPass || undefined,
+      type: proxyType,
+      testStatus: 'idle'
+    };
+    setProxies(prev => [...prev, newProxy]);
+    setProxyAlias(''); setProxyHost(''); setProxyPort('8080'); setProxyUser(''); setProxyPass('');
+    setIsAddingProxy(false);
+  };
+
+  // Fix: Added handleHypeSquadJoin for triggering house affiliation changes
+  const handleHypeSquadJoin = async (houseId: number) => {
+    if (!selectedId || selectedType !== 'STANDARD') return;
+    const worker = standardWorkers.current.get(selectedId);
+    if (!worker) return alert("Engine must be active to sync HypeSquad status.");
+    await worker.switchHypeSquad(houseId);
   };
 
   const testProxy = async (id: string) => {
@@ -289,32 +310,22 @@ const App: React.FC = () => {
     if (!p) return;
     setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'testing' } : item));
     const relayUrl = getRelayUrl();
-    if (!relayUrl || mixedContentWarning) {
-      alert(mixedContentWarning ? "Mixed Content Error: You MUST use a WSS tunnel (see RDP Setup) to test proxies on Vercel." : "Relay URL missing.");
-      setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item));
-      return;
-    }
+    if (!relayUrl || relayHealth !== 'online') { alert("Relay Node is offline. Fix connectivity first."); setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item)); return; }
     try {
       const testWs = new WebSocket(relayUrl);
       const timeout = setTimeout(() => { if (testWs.readyState !== WebSocket.CLOSED) { testWs.close(); setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item)); } }, 10000);
       testWs.onopen = () => testWs.send(JSON.stringify({ type: 'TEST_PROXY', proxy: { host: p.host, port: p.port, username: p.username, password: p.password, type: p.type } }));
-      testWs.onmessage = (event) => {
-        clearTimeout(timeout);
-        const data = JSON.parse(event.data);
-        if (data.type === 'TEST_RESULT') { setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'success', ip: data.ip, country: data.country } : item)); testWs.close(); }
-        else if (data.type === 'RELAY_ERROR') { setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item)); testWs.close(); }
-      };
+      testWs.onmessage = (event) => { clearTimeout(timeout); const data = JSON.parse(event.data); if (data.type === 'TEST_RESULT') { setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'success', ip: data.ip, country: data.country } : item)); testWs.close(); } else if (data.type === 'RELAY_ERROR') { setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item)); testWs.close(); } };
       testWs.onerror = () => { clearTimeout(timeout); setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item)); };
     } catch (e) { setProxies(prev => prev.map(item => item.id === id ? { ...item, testStatus: 'failed' } : item)); }
   };
 
   const removeAccount = (id: string, type: AccountType) => { stopAccount(id, type); if (type === 'STANDARD') setSessions(p => p.filter(x => x.id !== id)); else setRotatorSessions(p => p.filter(x => x.id !== id)); if (selectedId === id) setSelectedId(null); };
   const removeProxy = (id: string) => { setProxies(p => p.filter(x => x.id !== id)); setSessions(s => s.map(x => x.proxyId === id ? { ...x, proxyId: undefined } : x)); setRotatorSessions(s => s.map(x => x.proxyId === id ? { ...x, proxyId: undefined } : x)); };
-  const currentAccount = selectedType === 'STANDARD' ? sessions.find(s => s.id === selectedId) : selectedType === 'ROTATOR' ? rotatorSessions.find(s => s.id === selectedId) : null;
   const formatUptime = (startTime: Date | null) => { if (!startTime) return '0 min'; const mins = Math.floor((new Date().getTime() - new Date(startTime).getTime()) / 60000); return mins > 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins} min`; };
   const handlePushProfileUpdate = async () => { if (!selectedId || selectedType !== 'STANDARD') return; const worker = standardWorkers.current.get(selectedId); if (!worker) return alert("Start engine first."); setIsSyncingProfile(true); try { const success = await worker.updateProfile(editingProfile); if (success) setEditingProfile({}); } finally { setIsSyncingProfile(false); } };
-  const handleHypeSquadJoin = (houseId: number) => { if (!selectedId || selectedType !== 'STANDARD') return; const worker = standardWorkers.current.get(selectedId); if (!worker) return alert("Start engine first."); worker.switchHypeSquad(houseId); };
   const getProfileValue = (key: keyof DiscordUserProfile) => (editingProfile[key] as any) ?? (currentAccount as DiscordSession).profile?.[key] ?? '';
+  const currentAccount = selectedType === 'STANDARD' ? sessions.find(s => s.id === selectedId) : selectedType === 'ROTATOR' ? rotatorSessions.find(s => s.id === selectedId) : null;
 
   const rdpCommand = `# COPY THIS INTO POWERSHELL ON YOUR RDP
 # 1. Setup Engine
@@ -322,14 +333,16 @@ mkdir C:\\Lootify; cd C:\\Lootify
 git clone https://github.com/LootifyStore/lootifyonlinerbackend.git .
 npm install
 
-# 2. START SECURE TUNNEL (Bypasses Browser SSL block)
-# This command gives you a wss:// URL for free
-npx localtunnel --port 8080
+# 2. START NGROK (Bypasses Browser SSL block)
+# Login at ngrok.com, get your token.
+ngrok http 8080
 
 # 3. Start Engine
 node index.js
 
-# NOTE: Copy the URL from step 2 into Vercel Settings!`;
+# NOTE: Copy the 'https' Forwarding URL from Ngrok.
+# In Vercel, set VITE_RELAY_URL to that URL, but change 'https://' to 'wss://'!
+# Example: wss://a1b2-c3d4.ngrok-free.app`;
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#050810] text-slate-100 font-sans">
@@ -344,14 +357,33 @@ node index.js
 
         <nav className="flex-1 overflow-y-auto py-8 px-4 space-y-10 custom-scrollbar">
           <div className="space-y-3">
-             <div className="px-4 flex items-center justify-between"><span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Infrastructure</span><button onClick={() => setShowRDPGuide(true)} className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1"><span className="text-[8px] font-black">RDP SETUP</span><Terminal className="w-3 h-3" /></button></div>
-             <div className={`mx-2 p-5 rounded-3xl border transition-all ${relayHealth === 'online' ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
+             <div className="px-4 flex items-center justify-between">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Infrastructure</span>
+                <button onClick={() => setShowRDPGuide(true)} className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1">
+                   <Settings className="w-3 h-3" />
+                   <span className="text-[8px] font-black uppercase tracking-tight">Diagnostics</span>
+                </button>
+             </div>
+             <div className={`mx-2 p-5 rounded-3xl border transition-all ${relayHealth === 'online' ? 'bg-indigo-500/5 border-indigo-500/20' : (relayHealth === 'checking' ? 'bg-amber-500/5 border-amber-500/20' : 'bg-red-500/5 border-red-500/20')}`}>
                 <div className="flex items-center justify-between mb-2">
-                   <div className="flex items-center gap-3">{isRDPDeployment() ? <Server className="w-4 h-4 text-emerald-400" /> : <Cloud className="w-4 h-4 text-indigo-400" />}<span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{isRDPDeployment() ? 'RDP Dedicated' : 'Relay'}</span></div>
-                   <div className={`w-2 h-2 rounded-full ${relayHealth === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                   <div className="flex items-center gap-3">
+                      {isRDPDeployment() ? <Server className="w-4 h-4 text-emerald-400" /> : <Cloud className="w-4 h-4 text-indigo-400" />}
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Relay Node</span>
+                   </div>
+                   <div className={`w-2 h-2 rounded-full ${relayHealth === 'online' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : (relayHealth === 'checking' ? 'bg-amber-500 animate-pulse' : 'bg-red-500')}`} />
                 </div>
-                <p className="text-[8px] font-mono text-slate-600 truncate">{getRelayUrl() || 'NOT_CONFIGURED'}</p>
-                {mixedContentWarning && <div className="mt-3 p-3 bg-red-500/10 rounded-2xl border border-red-500/20 flex flex-col gap-2"><div className="flex items-center gap-2"><AlertTriangle className="w-3 h-3 text-red-500" /><span className="text-[8px] font-black text-red-400 uppercase">Mixed Content Blocked</span></div><p className="text-[7px] font-medium text-slate-400 leading-tight">Vercel (HTTPS) cannot talk to RDP (WS). Use a WSS tunnel (see Setup Guide).</p></div>}
+                <p className="text-[8px] font-mono text-slate-600 truncate mb-1">{getRelayUrl() || 'NOT_CONFIGURED'}</p>
+                <div className="flex justify-between items-center mt-3">
+                   <span className={`text-[8px] font-black uppercase ${relayHealth === 'online' ? 'text-emerald-500' : 'text-red-500'}`}>{relayHealth}</span>
+                   <div className="flex gap-1">
+                      {getTunnelHttpUrl() && (
+                        <a href={getTunnelHttpUrl()!} target="_blank" rel="noreferrer" title="Open Tunnel Landing Page" className="p-1.5 bg-slate-900 rounded-lg border border-slate-800 hover:bg-slate-800 transition-colors">
+                           <Eye className="w-2.5 h-2.5 text-indigo-400" />
+                        </a>
+                      )}
+                      <button onClick={runDiagnostics} className="p-1.5 bg-slate-900 rounded-lg border border-slate-800 hover:bg-slate-800 transition-colors"><RefreshCcw className={`w-2.5 h-2.5 ${relayHealth === 'checking' && 'animate-spin'}`} /></button>
+                   </div>
+                </div>
              </div>
           </div>
 
@@ -372,23 +404,42 @@ node index.js
       <main className="flex-1 overflow-y-auto flex flex-col relative">
         {showRDPGuide && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-8 bg-black/90 backdrop-blur-md">
-            <div className="w-full max-w-4xl bg-[#0a0f1d] border border-emerald-500/30 rounded-[3rem] p-12 shadow-3xl overflow-hidden relative">
-              <div className="flex items-center gap-4 mb-8"><div className="p-4 bg-emerald-500/10 rounded-2xl border border-emerald-500/20"><Monitor className="w-8 h-8 text-emerald-400" /></div><h2 className="text-3xl font-black uppercase italic tracking-tighter">Bypass Browser SSL Block</h2></div>
+            <div className="w-full max-w-5xl bg-[#0a0f1d] border border-emerald-500/30 rounded-[3rem] p-12 shadow-3xl overflow-hidden relative">
+              <div className="flex items-center gap-4 mb-8"><div className="p-4 bg-emerald-500/10 rounded-2xl border border-emerald-500/20"><Monitor className="w-8 h-8 text-emerald-400" /></div><h2 className="text-3xl font-black uppercase italic tracking-tighter">Connectivity Diagnostic</h2></div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                 <div className="space-y-6">
-                  <div className="p-6 bg-red-500/10 border border-red-500/20 rounded-3xl space-y-4"><h4 className="text-[10px] font-black uppercase text-red-400 flex items-center gap-2"><Lock className="w-3 h-3" /> MIXED CONTENT ISSUE</h4><p className="text-xs text-slate-300 leading-relaxed font-bold italic uppercase">Vercel is HTTPS. Browsers block WS connections from HTTPS. You must use a WSS tunnel (Secure WebSocket).</p></div>
-                  <div className="p-6 bg-slate-900/50 rounded-3xl border border-slate-800 space-y-4">
-                    <h4 className="text-[10px] font-black uppercase text-slate-500 flex items-center gap-2"><Link2 className="w-3 h-3" /> STEPS TO FIX</h4>
-                    <ul className="text-xs space-y-3 text-slate-400">
-                      <li>1. On RDP, run: <code className="bg-black p-1 text-emerald-400">npx localtunnel --port 8080</code></li>
-                      <li>2. Copy the URL given (e.g. https://shaggy-dogs.loca.lt)</li>
-                      <li>3. Go to Vercel Variable <code className="bg-black p-1 text-white">VITE_RELAY_URL</code></li>
-                      <li>4. Paste the URL but change <span className="text-white">https://</span> to <span className="text-emerald-400">wss://</span></li>
-                    </ul>
+                  <div className="p-6 bg-slate-900 border border-slate-800 rounded-[2rem] space-y-4">
+                     <h4 className="text-[10px] font-black uppercase text-indigo-400 flex items-center gap-2">Handshake Logs</h4>
+                     <div className="bg-black/50 p-4 rounded-xl font-mono text-[10px] h-32 overflow-y-auto custom-scrollbar space-y-1">
+                        {diagOutput.map((line, i) => <p key={i} className={line.includes('❌') ? 'text-red-400' : line.includes('✅') ? 'text-emerald-400' : 'text-slate-400'}>{line}</p>)}
+                     </div>
+                     <div className="grid grid-cols-2 gap-2">
+                        <button onClick={runDiagnostics} className="py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all">Retry Link</button>
+                        {getTunnelHttpUrl() && (
+                          <button onClick={() => window.open(getTunnelHttpUrl()!, '_blank')} className="py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2">
+                            <ExternalLink className="w-3 h-3" /> Visit Tunnel
+                          </button>
+                        )}
+                     </div>
+                  </div>
+                  <div className="p-6 bg-amber-500/10 border border-amber-500/20 rounded-[2rem] space-y-3">
+                    <h4 className="text-[10px] font-black uppercase text-amber-500 flex items-center gap-2"><ShieldAlert className="w-3 h-3" /> Fix "Handshake Failed"</h4>
+                    <p className="text-[10px] text-slate-300 leading-relaxed uppercase font-bold italic">
+                      1. Click "Visit Tunnel" above. This opens your Ngrok/Localtunnel page.<br/>
+                      2. If you see a warning screen, click "Visit Site" or "Continue".<br/>
+                      3. Close that tab and come back here. Refresh this dashboard.<br/>
+                      4. <span className="text-white">ETIMEDOUT?</span> This means your RDP's Firewall is blocking outbound port 443. Enable "Web Browsing" on your RDP!
+                    </p>
                   </div>
                   <button onClick={() => setShowRDPGuide(false)} className="w-full py-4 bg-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-slate-700">Dismiss</button>
                 </div>
-                <div className="space-y-4"><p className="text-[10px] font-black text-slate-500 uppercase ml-1">Setup Scripts</p><div className="relative group"><textarea readOnly value={rdpCommand} className="w-full h-[320px] bg-black border border-slate-800 rounded-3xl p-6 font-mono text-[10px] text-emerald-400 outline-none resize-none shadow-inner" /><button onClick={() => { navigator.clipboard.writeText(rdpCommand); alert("Bridge commands copied!"); }} className="absolute bottom-4 right-4 p-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xl transition-all active:scale-95"><ClipboardList className="w-4 h-4" /></button></div></div>
+                <div className="space-y-4">
+                   <p className="text-[10px] font-black text-slate-500 uppercase ml-1">Secure Bridge Script</p>
+                   <div className="relative group">
+                      <textarea readOnly value={rdpCommand} className="w-full h-[320px] bg-black border border-slate-800 rounded-3xl p-6 font-mono text-[10px] text-emerald-400 outline-none resize-none shadow-inner" />
+                      <button onClick={() => { navigator.clipboard.writeText(rdpCommand); alert("Bridge script copied!"); }} className="absolute bottom-4 right-4 p-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xl transition-all active:scale-95"><ClipboardList className="w-4 h-4" /></button>
+                   </div>
+                </div>
               </div>
             </div>
           </div>
@@ -398,7 +449,7 @@ node index.js
           <div className="flex-1 flex items-center justify-center p-12">
             <div className={`w-full max-w-lg bg-[#0a0f1d] border rounded-[3rem] p-12 shadow-3xl transition-all ${addType === 'ROTATOR' ? 'border-purple-500/20' : 'border-blue-500/20'}`}>
               <div className={`w-20 h-20 rounded-[2rem] flex items-center justify-center mx-auto mb-8 border ${addType === 'ROTATOR' ? 'bg-purple-500/10 border-purple-500/20' : 'bg-blue-500/10 border-blue-500/20'}`}>{addType === 'ROTATOR' ? <RotateCw className="w-10 h-10 text-purple-400" /> : <Layers className="w-10 h-10 text-blue-400" />}</div>
-              <h2 className="text-3xl font-black mb-2 text-center tracking-tighter uppercase italic">Authorize Node</h2>
+              <h2 className="text-3xl font-black mb-2 text-center tracking-tighter uppercase italic">Register Node</h2>
               <form onSubmit={handleAdd} className="space-y-6">
                 <div className="grid grid-cols-2 gap-4"><div className="space-y-3"><label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Alias</label><input type="text" placeholder="e.g. Main Acc" value={newLabel} onChange={e => setNewLabel(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:border-blue-500/40 font-semibold" /></div><div className="space-y-3"><label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Route</label><select value={selectedProxyId} onChange={e => setSelectedProxyId(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 text-sm focus:border-blue-500/40 font-semibold text-slate-400"><option value="">Direct Link</option>{proxies.map(p => (<option key={p.id} value={p.id}>{p.alias}</option>))}</select></div></div>
                 <div className="space-y-3"><label className="text-[10px] font-black text-slate-600 uppercase tracking-widest ml-1">Discord Token</label><input type="password" placeholder="MTAz..." value={newToken} onChange={e => setNewToken(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-sm focus:border-blue-500/40 font-mono" /></div>

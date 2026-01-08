@@ -54,13 +54,9 @@ export class DiscordWorker {
     });
   }
 
-  /**
-   * Routes REST calls through the relay if a proxy is configured.
-   */
   private async restRequest(method: string, endpoint: string, body?: any) {
     const url = `https://discord.com/api/v10${endpoint}`;
     
-    // Direct fetch as fallback (often fails CORS on Discord's side)
     const directFetch = async () => {
       try {
         const res = await fetch(url, {
@@ -82,16 +78,12 @@ export class DiscordWorker {
       }
     };
 
-    if (!this.RELAY_URL) {
-      return directFetch();
-    }
+    if (!this.RELAY_URL) return directFetch();
 
-    // Use the relay WebSocket bridge for REST proxying
     return new Promise((resolve) => {
       const restWs = new WebSocket(this.RELAY_URL);
       const timeout = setTimeout(() => {
         restWs.close();
-        this.log('Relay REST bridge timed out. Switching to Direct...', 'DEBUG');
         resolve(directFetch());
       }, 8000);
 
@@ -100,18 +92,9 @@ export class DiscordWorker {
           type: 'REST_PROXY',
           method,
           endpoint: url,
-          headers: { 
-            'Authorization': this.token,
-            'Content-Type': 'application/json'
-          },
+          headers: { 'Authorization': this.token, 'Content-Type': 'application/json' },
           body,
-          proxy: this.config.proxy ? {
-            host: this.config.proxy.host,
-            port: this.config.proxy.port,
-            username: this.config.proxy.username,
-            password: this.config.proxy.password,
-            type: this.config.proxy.type
-          } : null
+          proxy: this.config.proxy ? { host: this.config.proxy.host, port: this.config.proxy.port, username: this.config.proxy.username, password: this.config.proxy.password, type: this.config.proxy.type } : null
         }));
       };
 
@@ -119,23 +102,14 @@ export class DiscordWorker {
         clearTimeout(timeout);
         try {
           const data = JSON.parse(e.data);
-          if (data.type === 'REST_RESULT') {
-            resolve(data.data);
-          } else if (data.type === 'RELAY_ERROR') {
-             this.log(`Relay Node error: ${data.error}`, 'ERROR');
-             resolve(null);
-          } else {
-            resolve(null);
-          }
-        } catch (err) {
-          resolve(null);
-        }
+          if (data.type === 'REST_RESULT') resolve(data.data);
+          else resolve(null);
+        } catch (err) { resolve(null); }
         restWs.close();
       };
 
       restWs.onerror = () => {
         clearTimeout(timeout);
-        this.log('Relay REST bridge link failure.', 'ERROR');
         resolve(directFetch());
         restWs.close();
       };
@@ -144,8 +118,6 @@ export class DiscordWorker {
 
   public async updateProfile(data: Partial<DiscordUserProfile>) {
     this.log(`Syncing identity updates to Discord...`, 'DEBUG');
-    
-    // Clean data to only include valid PATCH fields for /users/@me
     const payload: any = {};
     if (data.global_name !== undefined) payload.global_name = data.global_name.trim() || null;
     if (data.bio !== undefined) payload.bio = data.bio.trim();
@@ -158,38 +130,30 @@ export class DiscordWorker {
       this.onUpdate(this.isConnected ? 'ONLINE' : 'CONNECTING', undefined, result);
       return true;
     }
-    
-    const errorMsg = result?.message || result?.errors?.bio?._errors?.[0]?.message || 'Target Refused Connection';
-    this.log(`Identity Sync Failed: ${errorMsg}`, 'ERROR');
+    this.log(`Identity Sync Failed. Verify token permissions.`, 'ERROR');
     return false;
   }
 
   public async switchHypeSquad(houseId: number) {
     this.log(`Requesting HypeSquad affiliation change...`, 'DEBUG');
-    const result: any = await this.restRequest('POST', '/hypesquad/online', { house_id: houseId });
-    if (result && result.message) {
-      this.log(`HypeSquad Error: ${result.message}`, 'ERROR');
-    } else {
-      this.log(`HypeSquad affiliation confirmed.`, 'SUCCESS');
-    }
+    await this.restRequest('POST', '/hypesquad/online', { house_id: houseId });
+    this.log(`HypeSquad affiliation update sent.`, 'SUCCESS');
   }
 
   public connect() {
     this.isConnected = false;
     const proxy = this.config.proxy;
     const discordGateway = 'wss://gateway.discord.gg/?v=10&encoding=json';
-    const connectionUrl = (proxy && this.RELAY_URL) ? this.RELAY_URL : discordGateway;
-
-    if (proxy && !this.RELAY_URL) {
-      this.log('Relay Node offline or missing. Direct link will be used.', 'ERROR');
+    
+    // Safety check for mixed content
+    if (window.location.protocol === 'https:' && this.RELAY_URL.startsWith('ws://')) {
+       this.log("Security Block: 'ws://' link detected on HTTPS. Use 'wss://' tunnel link.", 'ERROR');
+       this.onUpdate('ERROR');
+       return;
     }
 
-    const proxyIp = proxy?.ip || proxy?.host || 'DIRECT';
-    this.onUpdate('CONNECTING', { 
-      timestamp: new Date(), 
-      message: proxy ? `Routing via Relay [${proxy.alias}] at ${proxyIp}...` : `Establishing Direct Discord Link...`, 
-      type: 'INFO' 
-    });
+    const connectionUrl = (proxy && this.RELAY_URL) ? this.RELAY_URL : discordGateway;
+    this.onUpdate('CONNECTING', { timestamp: new Date(), message: proxy ? `Routing via Relay Node...` : `Establishing Direct Discord Link...`, type: 'INFO' });
 
     try {
       this.ws = new WebSocket(connectionUrl);
@@ -199,26 +163,29 @@ export class DiscordWorker {
           this.ws?.send(JSON.stringify({
             type: 'INIT_PROXY',
             target: discordGateway,
-            proxy: {
-              host: proxy.host,
-              port: proxy.port,
-              username: proxy.username,
-              password: proxy.password,
-              type: proxy.type
-            }
+            proxy: { host: proxy.host, port: proxy.port, username: proxy.username, password: proxy.password, type: proxy.type }
           }));
         }
       };
 
       this.ws.onmessage = (event) => {
-        const payload = JSON.parse(event.data);
+        let payload;
+        try {
+           payload = JSON.parse(event.data);
+        } catch(e) {
+           this.log("Relay Handshake Error: Invalid response. Ensure tunnel landing page is bypassed.", 'ERROR');
+           return;
+        }
 
         if (payload.type === 'RELAY_READY') {
-          this.log('Relay link verified. Establishing Discord Auth...', 'SUCCESS');
+          this.log('Relay link verified. Authorizing...', 'SUCCESS');
           return;
         }
         if (payload.type === 'RELAY_ERROR') {
           this.log(`Relay Handshake Failed: ${payload.error}`, 'ERROR');
+          if (payload.error.includes('ETIMEDOUT')) {
+             this.log("Tip: RDP is unreachable or firewall is blocking Discord outbound link.", 'DEBUG');
+          }
           this.onUpdate('ERROR');
           return;
         }
@@ -227,26 +194,26 @@ export class DiscordWorker {
         if (s) this.sequence = s;
 
         switch (op) {
-          case 10: // Hello
+          case 10: 
             this.heartbeatInterval = d.heartbeat_interval;
             this.startHeartbeat();
             this.identify();
             break;
-          case 0: // Dispatch
+          case 0: 
             if (t === 'READY') {
               this.isConnected = true;
               this.log(`Authorized as ${d.user.username}`, 'SUCCESS');
               this.onUpdate('ONLINE', undefined, d.user);
             }
             break;
-          case 1: // Heartbeat Request
+          case 1: 
             this.sendHeartbeat();
             break;
         }
       };
 
       this.ws.onerror = () => {
-        this.log(`WebSocket link failure. Verify token and network status.`, 'ERROR');
+        this.log(`WebSocket link failure. Check Infrastructure panel for SSL/Mixed-Content diagnostics.`, 'ERROR');
         this.onUpdate('ERROR');
       };
 
@@ -254,94 +221,34 @@ export class DiscordWorker {
         this.isConnected = false;
         this.stopHeartbeat();
         if (event.code !== 1000) {
-           this.log(`Socket closed (Code: ${event.code}). Attempting recovery...`, 'DEBUG');
+           this.log(`Socket closed (Code: ${event.code}). Retrying...`, 'DEBUG');
            this.reconnect();
         } else {
            this.onUpdate('OFFLINE');
         }
       };
-
     } catch (error) {
-      this.log(`System Error: ${error}`, 'ERROR');
+      this.log(`Engine failure: ${error}`, 'ERROR');
       this.onUpdate('ERROR');
     }
   }
 
   private identify() {
     const activities: any[] = [];
-    
-    // Custom Status with Emoji Support
     if (this.config.customStatusText || this.config.statusEmoji) {
       const emojiParts = this.config.statusEmoji?.split(':');
-      const emojiObj = emojiParts && emojiParts.length >= 2 ? {
-        name: emojiParts[0],
-        id: emojiParts[1],
-        animated: false
-      } : this.config.statusEmoji ? {
-        name: this.config.statusEmoji
-      } : undefined;
-
-      activities.push({
-        type: 4,
-        name: "Custom Status",
-        state: this.config.customStatusText || "",
-        emoji: emojiObj
-      });
+      const emojiObj = emojiParts && emojiParts.length >= 2 ? { name: emojiParts[0], id: emojiParts[1], animated: false } : this.config.statusEmoji ? { name: this.config.statusEmoji } : undefined;
+      activities.push({ type: 4, name: "Custom Status", state: this.config.customStatusText || "", emoji: emojiObj });
     }
-
-    // Rich Presence
     if (this.config.rpcEnabled && this.config.activityName) {
-      activities.push({
-        type: this.config.activityType,
-        name: this.config.activityName,
-        details: this.config.activityDetails || undefined,
-        state: this.config.activityState || undefined,
-        application_id: this.config.applicationId || undefined
-      });
+      activities.push({ type: this.config.activityType, name: this.config.activityName, details: this.config.activityDetails || undefined, state: this.config.activityState || undefined, application_id: this.config.applicationId || undefined });
     }
-
-    this.ws?.send(JSON.stringify({
-      op: 2,
-      d: {
-        token: this.token,
-        properties: { $os: "Windows", $browser: "Chrome", $device: "" },
-        presence: {
-          status: this.config.status,
-          afk: false,
-          activities: activities,
-          since: 0
-        }
-      }
-    }));
+    this.ws?.send(JSON.stringify({ op: 2, d: { token: this.token, properties: { $os: "Windows", $browser: "Chrome", $device: "" }, presence: { status: this.config.status, afk: false, activities: activities, since: 0 } } }));
   }
 
-  private startHeartbeat() {
-    if (this.heartbeatInterval) {
-      this.intervalRef = setInterval(() => this.sendHeartbeat(), this.heartbeatInterval);
-    }
-  }
-
-  private sendHeartbeat() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ op: 1, d: this.sequence }));
-    }
-  }
-
-  private stopHeartbeat() {
-    if (this.intervalRef) clearInterval(this.intervalRef);
-  }
-
-  private reconnect() {
-    this.stopHeartbeat();
-    setTimeout(() => this.connect(), 5000);
-  }
-
-  public disconnect() {
-    this.stopHeartbeat();
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close(1000);
-    }
-    this.onUpdate('OFFLINE');
-  }
+  private startHeartbeat() { if (this.heartbeatInterval) this.intervalRef = setInterval(() => this.sendHeartbeat(), this.heartbeatInterval); }
+  private sendHeartbeat() { if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ op: 1, d: this.sequence })); }
+  private stopHeartbeat() { if (this.intervalRef) clearInterval(this.intervalRef); }
+  private reconnect() { this.stopHeartbeat(); setTimeout(() => this.connect(), 5000); }
+  public disconnect() { this.stopHeartbeat(); if (this.ws) { this.ws.onclose = null; this.ws.close(1000); } this.onUpdate('OFFLINE'); }
 }
