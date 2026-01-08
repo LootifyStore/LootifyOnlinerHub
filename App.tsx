@@ -53,7 +53,12 @@ import {
   Palette,
   Flag,
   Save,
-  CreditCard
+  CreditCard,
+  Terminal,
+  Lock,
+  ExternalLink,
+  // Added Cloud icon import to fix line 490 error
+  Cloud
 } from 'lucide-react';
 
 // Helper to revive dates from localStorage
@@ -102,6 +107,10 @@ const App: React.FC = () => {
   const [renameValue, setRenameValue] = useState('');
   const [editingProfile, setEditingProfile] = useState<Partial<DiscordUserProfile>>({});
   const [isSyncingProfile, setIsSyncingProfile] = useState(false);
+  
+  // Infrastructure States
+  const [showRDPGuide, setShowRDPGuide] = useState(false);
+  const [relayHealth, setRelayHealth] = useState<'idle' | 'online' | 'offline'>('idle');
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
@@ -119,6 +128,39 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('lootify_proxies', JSON.stringify(proxies));
   }, [proxies]);
+
+  // Infrastructure Logic
+  const getRelayUrl = () => {
+    return (import.meta as any).env?.VITE_RELAY_URL || 
+           (window as any).process?.env?.VITE_RELAY_URL || 
+           "";
+  };
+
+  const isRDPDeployment = () => {
+    const url = getRelayUrl();
+    return url && !url.includes('render.com') && !url.includes('vercel.app') && !url.includes('replit.app');
+  };
+
+  useEffect(() => {
+    const url = getRelayUrl();
+    if (!url) { setRelayHealth('offline'); return; }
+    
+    const check = async () => {
+      try {
+        const httpUrl = url.replace('ws://', 'http://').replace('wss://', 'https://');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        await fetch(httpUrl, { mode: 'no-cors', signal: controller.signal });
+        setRelayHealth('online');
+        clearTimeout(timeoutId);
+      } catch (e) {
+        setRelayHealth('offline');
+      }
+    };
+    check();
+    const interval = setInterval(check, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // AUTO-RESUME ENGINE: Restarts workers that were online before refresh
   useEffect(() => {
@@ -139,12 +181,6 @@ const App: React.FC = () => {
       }
     });
   }, []);
-
-  const getRelayUrl = () => {
-    return (import.meta as any).env?.VITE_RELAY_URL || 
-           (window as any).process?.env?.VITE_RELAY_URL || 
-           "";
-  };
 
   const addStandardLog = useCallback((id: string, log: LogEntry) => {
     setSessions(prev => prev.map(s => s.id === id ? { ...s, logs: [...s.logs, log].slice(-100) } : s));
@@ -413,6 +449,18 @@ const App: React.FC = () => {
     return (editingProfile[key] as any) ?? (currentAccount as DiscordSession).profile?.[key] ?? '';
   };
 
+  const rdpCommand = `# COPY THIS INTO POWERSHELL ON YOUR RDP
+# 1. Setup Lootify Environment
+mkdir C:\\Lootify; cd C:\\Lootify
+git clone https://github.com/LootifyStore/lootifyonlinerbackend.git .
+npm install
+
+# 2. Open Firewall for Engine Door (Port 8080)
+New-NetFirewallRule -DisplayName "Lootify Relay 8080" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
+
+# 3. Start Engine
+node index.js`;
+
   return (
     <div className="flex h-screen overflow-hidden bg-[#050810] text-slate-100 font-sans">
       <aside className="w-80 bg-[#0a0f1d] border-r border-slate-800/40 flex flex-col shrink-0 shadow-2xl">
@@ -430,12 +478,27 @@ const App: React.FC = () => {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-8 px-4 space-y-10 custom-scrollbar">
-          <div className="px-4 py-3 bg-indigo-500/5 border border-indigo-500/10 rounded-2xl flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Shield className="w-4 h-4 text-indigo-400" />
-              <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300">Auto-Resume</span>
-            </div>
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+          {/* Infrastructure Section Added */}
+          <div className="space-y-3">
+             <div className="px-4 flex items-center justify-between">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Infrastructure</span>
+                <button onClick={() => setShowRDPGuide(true)} className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1">
+                   <span className="text-[8px] font-black">RDP SETUP</span>
+                   <Terminal className="w-3 h-3" />
+                </button>
+             </div>
+             <div className={`mx-2 p-5 rounded-3xl border transition-all ${relayHealth === 'online' ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
+                <div className="flex items-center justify-between mb-2">
+                   <div className="flex items-center gap-3">
+                      {isRDPDeployment() ? <Server className="w-4 h-4 text-emerald-400" /> : <Cloud className={`w-4 h-4 ${relayHealth === 'online' ? 'text-indigo-400' : 'text-red-400'}`} />}
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                         {isRDPDeployment() ? 'RDP Dedicated' : 'Cloud Relay'}
+                      </span>
+                   </div>
+                   <div className={`w-2 h-2 rounded-full ${relayHealth === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                </div>
+                <p className="text-[8px] font-mono text-slate-600 truncate">{getRelayUrl() || 'NOT_CONFIGURED'}</p>
+             </div>
           </div>
 
           <div>
@@ -523,6 +586,39 @@ const App: React.FC = () => {
       </aside>
 
       <main className="flex-1 overflow-y-auto flex flex-col relative">
+        {/* RDP Deployment Guide Modal */}
+        {showRDPGuide && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-8 bg-black/80 backdrop-blur-md">
+            <div className="w-full max-w-4xl bg-[#0a0f1d] border border-emerald-500/30 rounded-[3rem] p-12 shadow-3xl overflow-hidden relative">
+              <div className="flex items-center gap-4 mb-8">
+                <div className="p-4 bg-emerald-500/10 rounded-2xl border border-emerald-500/20"><Monitor className="w-8 h-8 text-emerald-400" /></div>
+                <h2 className="text-3xl font-black uppercase italic tracking-tighter">Initialize RDP Relay</h2>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                <div className="space-y-6">
+                  <p className="text-slate-400 text-sm leading-relaxed">Ensure your Windows RDP remains awake 24/7. Run the commands to start the <span className="text-emerald-400">Lootify Engine</span> on port 8080.</p>
+                  <div className="p-6 bg-slate-900/50 rounded-3xl border border-slate-800 space-y-4">
+                    <h4 className="text-[10px] font-black uppercase text-slate-500 flex items-center gap-2"><Lock className="w-3 h-3" /> SECURITY</h4>
+                    <ul className="text-xs space-y-2 text-slate-400">
+                      <li>• Port 8080 must be open (TCP Inbound)</li>
+                      <li>• Vercel Variable: <span className="text-white">ws://YOUR_RDP_IP:8080</span></li>
+                      <li>• Redploy on Vercel after updating variable</li>
+                    </ul>
+                  </div>
+                  <button onClick={() => setShowRDPGuide(false)} className="w-full py-4 bg-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-slate-700">Close Window</button>
+                </div>
+                <div className="space-y-4">
+                  <p className="text-[10px] font-black text-slate-500 uppercase ml-1">Command Suite (PowerShell)</p>
+                  <div className="relative group">
+                    <textarea readOnly value={rdpCommand} className="w-full h-[320px] bg-black border border-slate-800 rounded-3xl p-6 font-mono text-[10px] text-emerald-400 outline-none resize-none shadow-inner" />
+                    <button onClick={() => { navigator.clipboard.writeText(rdpCommand); alert("RDP Engine commands copied!"); }} className="absolute bottom-4 right-4 p-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xl transition-all active:scale-95"><ClipboardList className="w-4 h-4" /></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isAdding ? (
           <div className="flex-1 flex items-center justify-center p-12">
             <div className={`w-full max-w-lg bg-[#0a0f1d] border rounded-[3rem] p-12 shadow-3xl transition-all ${addType === 'ROTATOR' ? 'border-purple-500/20' : 'border-blue-500/20'}`}>
@@ -700,7 +796,7 @@ const App: React.FC = () => {
                                   <span className="text-[10px] font-black uppercase tracking-widest leading-tight">Link Refused: Verify Node Status</span>
                                </div>
                             ) : p.testStatus === 'testing' ? (
-                               <div className="mt-4 p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl text-amber-400 flex items-center gap-3">
+                               <div className="mt-4 p-4 bg-amber-500/5 border-amber-500/10 rounded-2xl text-amber-400 flex items-center gap-3">
                                   <RefreshCcw className="w-4 h-4 animate-spin shrink-0" />
                                   <span className="text-[10px] font-black uppercase tracking-widest">Routing through Relay...</span>
                                </div>
