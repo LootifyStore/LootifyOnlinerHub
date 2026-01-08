@@ -57,8 +57,8 @@ import {
   Terminal,
   Lock,
   ExternalLink,
-  // Added Cloud icon import to fix line 490 error
-  Cloud
+  Cloud,
+  HelpCircle
 } from 'lucide-react';
 
 // Helper to revive dates from localStorage
@@ -111,6 +111,7 @@ const App: React.FC = () => {
   // Infrastructure States
   const [showRDPGuide, setShowRDPGuide] = useState(false);
   const [relayHealth, setRelayHealth] = useState<'idle' | 'online' | 'offline'>('idle');
+  const [mixedContentWarning, setMixedContentWarning] = useState(false);
 
   const standardWorkers = useRef<Map<string, DiscordWorker>>(new Map());
   const rotatorWorkers = useRef<Map<string, DiscordRotatorWorker>>(new Map());
@@ -144,16 +145,25 @@ const App: React.FC = () => {
   useEffect(() => {
     const url = getRelayUrl();
     if (!url) { setRelayHealth('offline'); return; }
+
+    // Check for Mixed Content (Browser Security)
+    if (window.location.protocol === 'https:' && url.startsWith('ws://')) {
+      setMixedContentWarning(true);
+    } else {
+      setMixedContentWarning(false);
+    }
     
     const check = async () => {
       try {
         const httpUrl = url.replace('ws://', 'http://').replace('wss://', 'https://');
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
+        // Note: fetch might fail due to CORS on your RDP, but catching the error is the check
         await fetch(httpUrl, { mode: 'no-cors', signal: controller.signal });
         setRelayHealth('online');
         clearTimeout(timeoutId);
       } catch (e) {
+        // If it's a Mixed Content block, it will fail here immediately
         setRelayHealth('offline');
       }
     };
@@ -210,7 +220,6 @@ const App: React.FC = () => {
   }, []);
 
   const startStandard = (id: string) => {
-    // Optimization: Don't restart if already active in ref
     if (standardWorkers.current.has(id)) return;
 
     const s = sessions.find(x => x.id === id);
@@ -450,16 +459,20 @@ const App: React.FC = () => {
   };
 
   const rdpCommand = `# COPY THIS INTO POWERSHELL ON YOUR RDP
-# 1. Setup Lootify Environment
+# 1. Setup Lootify Core
 mkdir C:\\Lootify; cd C:\\Lootify
 git clone https://github.com/LootifyStore/lootifyonlinerbackend.git .
 npm install
 
-# 2. Open Firewall for Engine Door (Port 8080)
-New-NetFirewallRule -DisplayName "Lootify Relay 8080" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
+# 2. FIX SSL/MIXED CONTENT (The Senior way)
+# Since Vercel is HTTPS, you need a Secure (WSS) link. 
+# Run this to get a free WSS URL:
+npx localtunnel --port 8080
 
 # 3. Start Engine
-node index.js`;
+node index.js
+
+# Note: If you use the LocalTunnel URL, update Vercel VITE_RELAY_URL to that link!`;
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#050810] text-slate-100 font-sans">
@@ -478,7 +491,7 @@ node index.js`;
         </div>
 
         <nav className="flex-1 overflow-y-auto py-8 px-4 space-y-10 custom-scrollbar">
-          {/* Infrastructure Section Added */}
+          {/* Infrastructure Section */}
           <div className="space-y-3">
              <div className="px-4 flex items-center justify-between">
                 <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Infrastructure</span>
@@ -497,7 +510,13 @@ node index.js`;
                    </div>
                    <div className={`w-2 h-2 rounded-full ${relayHealth === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
                 </div>
-                <p className="text-[8px] font-mono text-slate-600 truncate">{getRelayUrl() || 'NOT_CONFIGURED'}</p>
+                <p className="text-[8px] font-mono text-slate-600 truncate mb-2">{getRelayUrl() || 'NOT_CONFIGURED'}</p>
+                {mixedContentWarning && (
+                  <div className="mt-2 p-2 bg-red-500/10 rounded-xl border border-red-500/20 flex items-start gap-2">
+                    <AlertTriangle className="w-3 h-3 text-red-500 shrink-0 mt-0.5" />
+                    <p className="text-[7px] font-bold text-red-400 uppercase tracking-tighter">Mixed Content Block: Browsers block WS from HTTPS. Use a WSS tunnel (ngrok/localtunnel).</p>
+                  </div>
+                )}
              </div>
           </div>
 
@@ -592,26 +611,32 @@ node index.js`;
             <div className="w-full max-w-4xl bg-[#0a0f1d] border border-emerald-500/30 rounded-[3rem] p-12 shadow-3xl overflow-hidden relative">
               <div className="flex items-center gap-4 mb-8">
                 <div className="p-4 bg-emerald-500/10 rounded-2xl border border-emerald-500/20"><Monitor className="w-8 h-8 text-emerald-400" /></div>
-                <h2 className="text-3xl font-black uppercase italic tracking-tighter">Initialize RDP Relay</h2>
+                <h2 className="text-3xl font-black uppercase italic tracking-tighter">Bridge RDP to Vercel</h2>
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                 <div className="space-y-6">
-                  <p className="text-slate-400 text-sm leading-relaxed">Ensure your Windows RDP remains awake 24/7. Run the commands to start the <span className="text-emerald-400">Lootify Engine</span> on port 8080.</p>
+                  <div className="p-6 bg-red-500/10 border border-red-500/20 rounded-3xl space-y-4">
+                     <h4 className="text-[10px] font-black uppercase text-red-400 flex items-center gap-2"><Lock className="w-3 h-3" /> SECURITY ALERT</h4>
+                     <p className="text-xs text-red-300 leading-relaxed font-bold uppercase italic">
+                       Modern browsers block insecure WebSockets (ws://) from secure sites (https://). Since you are on Vercel, you MUST use a Secure WebSocket (wss://).
+                     </p>
+                  </div>
                   <div className="p-6 bg-slate-900/50 rounded-3xl border border-slate-800 space-y-4">
-                    <h4 className="text-[10px] font-black uppercase text-slate-500 flex items-center gap-2"><Lock className="w-3 h-3" /> SECURITY</h4>
+                    <h4 className="text-[10px] font-black uppercase text-slate-500 flex items-center gap-2"><Globe className="w-3 h-3" /> FIX STEPS</h4>
                     <ul className="text-xs space-y-2 text-slate-400">
                       <li>• Port 8080 must be open (TCP Inbound)</li>
-                      <li>• Vercel Variable: <span className="text-white">ws://YOUR_RDP_IP:8080</span></li>
-                      <li>• Redploy on Vercel after updating variable</li>
+                      <li>• Best Fix: Use <span className="text-white">localtunnel</span> to get a wss:// URL</li>
+                      <li>• Update Vercel: <span className="text-white">VITE_RELAY_URL</span> = Your Tunnel Link</li>
+                      <li>• Redeploy Vercel to apply changes</li>
                     </ul>
                   </div>
-                  <button onClick={() => setShowRDPGuide(false)} className="w-full py-4 bg-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-slate-700">Close Window</button>
+                  <button onClick={() => setShowRDPGuide(false)} className="w-full py-4 bg-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-slate-700">Dismiss</button>
                 </div>
                 <div className="space-y-4">
                   <p className="text-[10px] font-black text-slate-500 uppercase ml-1">Command Suite (PowerShell)</p>
                   <div className="relative group">
                     <textarea readOnly value={rdpCommand} className="w-full h-[320px] bg-black border border-slate-800 rounded-3xl p-6 font-mono text-[10px] text-emerald-400 outline-none resize-none shadow-inner" />
-                    <button onClick={() => { navigator.clipboard.writeText(rdpCommand); alert("RDP Engine commands copied!"); }} className="absolute bottom-4 right-4 p-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xl transition-all active:scale-95"><ClipboardList className="w-4 h-4" /></button>
+                    <button onClick={() => { navigator.clipboard.writeText(rdpCommand); alert("Bridge commands copied!"); }} className="absolute bottom-4 right-4 p-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-xl transition-all active:scale-95"><ClipboardList className="w-4 h-4" /></button>
                   </div>
                 </div>
               </div>
@@ -791,12 +816,17 @@ node index.js`;
                                   <div className="flex items-center gap-2 mt-2 text-[10px] text-slate-500 font-bold uppercase"><MapPin className="w-3 h-3" /> {p.country}</div>
                                </div>
                             ) : p.testStatus === 'failed' ? (
-                               <div className="mt-4 p-4 bg-red-500/5 border border-red-500/10 rounded-2xl text-red-400 flex items-center gap-3">
-                                  <AlertCircle className="w-4 h-4 shrink-0" />
-                                  <span className="text-[10px] font-black uppercase tracking-widest leading-tight">Link Refused: Verify Node Status</span>
+                               <div className="mt-4 p-4 bg-red-500/5 border border-red-500/10 rounded-2xl text-red-400 flex flex-col gap-2">
+                                  <div className="flex items-center gap-3">
+                                    <AlertCircle className="w-4 h-4 shrink-0" />
+                                    <span className="text-[10px] font-black uppercase tracking-widest leading-tight">Link Refused: Verify Node Status</span>
+                                  </div>
+                                  <button onClick={() => setShowRDPGuide(true)} className="flex items-center gap-1.5 text-[8px] font-black text-amber-500 hover:text-amber-400 transition-colors uppercase border border-amber-500/20 rounded-lg p-2 bg-amber-500/5">
+                                    <HelpCircle className="w-3 h-3" /> Fix "Mixed Content" SSL error
+                                  </button>
                                </div>
                             ) : p.testStatus === 'testing' ? (
-                               <div className="mt-4 p-4 bg-amber-500/5 border-amber-500/10 rounded-2xl text-amber-400 flex items-center gap-3">
+                               <div className="mt-4 p-4 bg-amber-500/5 border border-amber-500/10 rounded-2xl text-amber-400 flex items-center gap-3">
                                   <RefreshCcw className="w-4 h-4 animate-spin shrink-0" />
                                   <span className="text-[10px] font-black uppercase tracking-widest">Routing through Relay...</span>
                                </div>
